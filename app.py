@@ -11,7 +11,6 @@ st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 
 # --- 預先讀取 ---
 try:
-    
     stock_map = database.get_stock_info_map()
 except:
     stock_map = {}
@@ -213,20 +212,19 @@ try:
             col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
         if not df_raw.empty:
-            # --- 1. 準備資料：計算總現金與總市值 ---
+            # --- 1. 準備資料 ---
             
             # 1-A. 總現金
             acc_balances = logic.calculate_account_balances(df_raw)
             total_cash = sum(acc_balances.values())
 
-            # 1-B. 總股票市值 (需先計算 FIFO + 結合市價)
+            # 1-B. 總股票市值
             df_fifo = logic.calculate_fifo_report(df_raw)
             total_market_value = 0
             df_final = pd.DataFrame()
 
             if not df_fifo.empty:
                 current_prices = st.session_state.get("realtime_prices", {})
-                # 呼叫 logic 計算損益與市值 (這裡會回傳完整的 df_final)
                 df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
                 total_market_value = df_final['股票市值'].sum()
             
@@ -234,45 +232,24 @@ try:
             total_assets = total_cash + total_market_value
             cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-            # --- 3. 顯示資產配置概況 (取代舊的帳戶列表) ---
+            # --- 3. 顯示資產配置概況 (修正順序) ---
             st.markdown("#### 💰 資產配置概況")
             
-            # 決定現金水位顏色
-            if cash_ratio > 90:
-                ratio_color = "#FF4B4B" # 紅
-            elif 80 <= cash_ratio <= 90:
-                ratio_color = "#FFA500" # 橘
-            elif 70 <= cash_ratio < 80:
-                ratio_color = "#1E90FF" # 藍
-            elif 60 <= cash_ratio < 70:
-                ratio_color = "#FFD700" # 黃(金)
-            else:
-                ratio_color = "#09AB3B" # 綠
-
+            # 順序：總資產 -> 現金餘額 -> 現金水位
             k1, k2, k3 = st.columns(3)
             
-            k1.metric("總現金餘額", f"${int(total_cash):,}")
-            
-            # 使用 HTML 顯示自定義顏色的 Metric
-            k2.markdown(f"""
-                <div>
-                    <div style="font-size: 14px; color: rgba(250, 250, 250, 0.6); margin-bottom: 4px;">現金水位</div>
-                    <div style="font-size: 32px; font-weight: 600; color: {ratio_color};">{cash_ratio:.2f}%</div>
-                </div>
-            """, unsafe_allow_html=True)
-
-            k3.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
+            k1.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
+            k2.metric("總現金餘額", f"${int(total_cash):,}")
+            k3.metric("現金水位", f"{cash_ratio:.2f}%") # 恢復預設顏色
 
             st.divider()
 
             # --- 4. 顯示股票部位 (FIFO 表格) ---
             if not df_final.empty:
-                # 這裡繼續顯示股票部位的細節
                 total_stock_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_stock_pnl = df_final['未實現損益'].sum()
                 total_stock_return = (total_stock_pnl / total_stock_cost * 100) if total_stock_cost != 0 else 0
                 
-                # 股票部位的小計
                 st.caption("股票部位損益")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("總持有成本", f"${total_stock_cost:,.0f}")
