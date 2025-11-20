@@ -5,12 +5,12 @@ from google.oauth2.service_account import Credentials
 from datetime import date
 import uuid
 
-# --- 設定與常數 (對應您的 GAS 設定) ---
-SHEET_NAME = '交易紀錄'  # [cite: 1]
-COMMISSION_RATE = 0.001425 # [cite: 3]
-DISCOUNT = 0.6  # [cite: 2]
-MIN_FEE = 1     # [cite: 3]
-TAX_RATE = 0.003 # [cite: 3]
+# --- 設定與常數 ---
+SHEET_NAME = '交易紀錄'
+COMMISSION_RATE = 0.001425
+DISCOUNT = 0.6
+MIN_FEE = 1
+TAX_RATE = 0.003
 
 st.set_page_config(page_title="股票資產管理", layout="wide")
 st.title('📊 股票資產管理系統 (Streamlit Cloud)')
@@ -18,16 +18,30 @@ st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 # --- 1. 連線設定 ---
 @st.cache_resource
 def get_worksheet():
-    # 從 Streamlit Secrets 讀取金鑰
+    # A. 檢查 Secrets 是否設定了金鑰
+    if "gcp_service_account" not in st.secrets:
+        st.error("❌ 未設定 gcp_service_account 金鑰！")
+        st.stop()
+    
+    # B. 檢查 Secrets 是否設定了試算表網址 (這是本次新增的)
+    if "spreadsheet_url" not in st.secrets:
+        st.error("❌ 未設定 spreadsheet_url！請至 Streamlit 後台 Secrets 新增此欄位。")
+        st.stop()
+
+    # C. 建立連線
     creds_dict = st.secrets["gcp_service_account"]
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     
-    # 請確認這裡的 URL 是正確的
-    sheet_url = "https://docs.google.com/spreadsheets/d/1H0qIDR1cQdLaPkr2cQLiISP-wUgwy2y45AxhetnZ0zo/edit" 
-    sheet = client.open_by_url(sheet_url)
-    return sheet.worksheet(SHEET_NAME)
+    # D. 使用設定檔中的網址開啟試算表
+    sheet_url = st.secrets["spreadsheet_url"]
+    try:
+        sheet = client.open_by_url(sheet_url)
+        return sheet.worksheet(SHEET_NAME)
+    except Exception as e:
+        st.error(f"❌ 無法開啟試算表，請檢查網址權限或名稱: {e}")
+        st.stop()
 
 # --- 2. 讀取資料 ---
 def load_data():
@@ -39,57 +53,35 @@ def load_data():
 def add_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes):
     ws = get_worksheet()
     
-    # --- Python 端的計算邏輯 (重現 GAS 邏輯) ---
-    # 1. 總成交金額 [cite: 87]
+    # 運算邏輯
     gross_amount = int(qty * price)
     
-    # 2. 手續費計算 (無條件捨去) [cite: 88, 89]
     raw_commission = int(gross_amount * COMMISSION_RATE * DISCOUNT)
     commission = max(raw_commission, MIN_FEE) if gross_amount > 0 else 0
     
-    # 3. 交易稅計算 (僅賣出有) [cite: 92]
     tax = int(gross_amount * TAX_RATE) if action == '賣出' else 0
-    
-    # 4. 總費用 [cite: 96]
-    other_fees = 0 # 暫時設為 0
+    other_fees = 0
     total_fees = commission + tax + other_fees
     
-    # 5. 淨收付金額 [cite: 97-100]
     net_cash_flow = 0
     if action in ['買進', '現金增資']:
         net_cash_flow = -(gross_amount + total_fees)
     elif action == '賣出':
         net_cash_flow = gross_amount - total_fees
     elif action == '現金股利':
-        net_cash_flow = gross_amount - total_fees # 假設 gross_amount 是股利總額
+        net_cash_flow = gross_amount - total_fees
     
-    # 產生唯一 ID (模擬 GAS 的 TXN-UUID) [cite: 57]
     txn_id = f"TXN-{str(uuid.uuid4())[:8].upper()}"
     
-    # 準備寫入的一列資料 (順序必須對應 Google Sheet 欄位) [cite: 4]
-    # ID, DATE, STOCK_ID, STOCK_NAME, ACTION, QTY, PRICE, COMMISSION, TAX, OTHER, GROSS, TOTAL_FEES, NET, SYNC, ACCOUNT, NOTES
+    # 準備寫入資料
     row_data = [
-        txn_id,
-        str(date_val),
-        str(stock_id),
-        stock_name,
-        action,
-        qty,
-        price,
-        commission,
-        tax,
-        other_fees,
-        gross_amount,
-        total_fees,
-        net_cash_flow,
-        False,  # Sync Status (設為 False 讓 GAS 有機會去處理它，如果需要的話)
-        account,
-        notes
+        txn_id, str(date_val), str(stock_id), stock_name, action, qty, price,
+        commission, tax, other_fees, gross_amount, total_fees, net_cash_flow,
+        False, account, notes
     ]
     
-    # 寫入 Google Sheet
     ws.append_row(row_data)
-    st.cache_data.clear() # 清除快取，確保下次讀取是新的
+    st.cache_data.clear()
 
 # --- 4. 側邊欄：新增交易表單 ---
 with st.sidebar:
@@ -97,10 +89,10 @@ with st.sidebar:
     with st.form("add_txn_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         input_date = col1.date_input("交易日期", date.today())
-        input_account = col2.text_input("交易帳戶", "帳戶A") # 暫時用手填，未來可讀取選單
+        input_account = col2.text_input("交易帳戶", "帳戶A")
         
         input_stock_id = col1.text_input("股票代號", "2330")
-        input_stock_name = col2.text_input("股票名稱", "台積電") # 未來可做自動查詢
+        input_stock_name = col2.text_input("股票名稱", "台積電")
         
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利'])
         
@@ -120,6 +112,8 @@ with st.sidebar:
                     input_account, input_notes
                 )
                 st.success(f"成功新增 {input_stock_name} {input_action} 紀錄！")
+                # 強制重新執行以顯示最新資料
+                st.rerun()
             except Exception as e:
                 st.error(f"寫入失敗: {e}")
 
@@ -127,11 +121,10 @@ with st.sidebar:
 try:
     df = load_data()
     
-    # 簡單的統計指標
-    st.metric("總交易筆數", len(df))
+    col_a, col_b = st.columns(2)
+    col_a.metric("總交易筆數", len(df))
     
     st.subheader("📋 最近交易紀錄 (最新 10 筆)")
-    # 依照日期排序顯示
     if not df.empty and '交易日期' in df.columns:
         df['交易日期'] = pd.to_datetime(df['交易日期'])
         df = df.sort_values(by='交易日期', ascending=False)
@@ -139,4 +132,4 @@ try:
     st.dataframe(df.head(10))
 
 except Exception as e:
-    st.error(f"讀取資料失敗，請檢查金鑰或試算表權限: {e}")
+    st.error(f"讀取資料失敗: {e}")
