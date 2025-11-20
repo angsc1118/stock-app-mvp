@@ -11,6 +11,7 @@ st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 
 # --- 預先讀取 ---
 try:
+    
     stock_map = database.get_stock_info_map()
 except:
     stock_map = {}
@@ -40,7 +41,7 @@ if "form_msg" not in st.session_state: st.session_state["form_msg"] = None
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
 
-# --- 新增交易 Callback ---
+# --- Callback ---
 def submit_callback():
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
@@ -93,7 +94,6 @@ def submit_callback():
 # ============================
 with st.sidebar:
     
-    # --- 功能頁籤：新增交易 vs 餘額校正 ---
     mode = st.radio("功能選擇", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
@@ -136,16 +136,12 @@ with st.sidebar:
         st.text_area("備註", placeholder="選填", key="txn_notes")
         st.button("💾 提交交易", on_click=submit_callback)
         
-    # --- 餘額校正模式 ---
     else:
         st.header("🔧 帳戶餘額校正")
         st.info("此功能會自動計算差額，並產生一筆「入金」或「出金」將系統餘額強制調整為實際餘額。")
         
-        # 1. 選擇帳戶
         adj_account = st.selectbox("選擇校正帳戶", options=account_list)
         
-        # 2. 取得系統目前餘額 (需即時計算)
-        # 這裡需要讀取資料，可能會有一點點延遲
         try:
             df_temp = database.load_data()
             balances = logic.calculate_account_balances(df_temp)
@@ -155,10 +151,8 @@ with st.sidebar:
             
         st.metric("💻 系統目前帳面餘額", f"${current_sys_bal:,}")
         
-        # 3. 輸入實際餘額
         actual_bal = st.number_input("💰 輸入實際餘額", value=current_sys_bal, step=1000)
         
-        # 4. 計算差額
         diff = actual_bal - current_sys_bal
         
         if diff == 0:
@@ -171,31 +165,18 @@ with st.sidebar:
                 st.warning(f"系統多記了 ${abs(diff):,} (需扣除)")
                 action_type = "出金"
                 
-            # 5. 執行校正按鈕
             if st.button("⚡ 執行強制校正"):
                 try:
-                    # 自動生成備註
                     note = f"餘額校正: 系統(${current_sys_bal:,}) -> 實際(${actual_bal:,})"
-                    
-                    # 寫入資料庫 (使用 database.save_transaction)
-                    # 股數/數量填 1，價格填差額的絕對值
                     database.save_transaction(
-                        date.today(), 
-                        "", # 股票代號
-                        "", # 股票名稱
-                        action_type, 
-                        1, # 數量
-                        abs(diff), # 金額
-                        adj_account, 
-                        note,
-                        0.6 # 折數無所謂
+                        date.today(), "", "", action_type, 
+                        1, abs(diff), adj_account, note, 0.6
                     )
                     st.success(f"已新增校正紀錄：{action_type} ${abs(diff):,}")
                     st.rerun()
                 except Exception as e:
                     st.error(f"校正失敗: {e}")
 
-    # 顯示成功/失敗訊息 (共用)
     if st.session_state["form_msg"]:
         msg = st.session_state["form_msg"]
         if msg["type"] == "success": st.success(msg["content"])
@@ -232,32 +213,71 @@ try:
             col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
         if not df_raw.empty:
-            # 顯示帳戶餘額概況 (新增功能)
-            st.markdown("#### 💰 各帳戶現金餘額")
+            # --- 1. 準備資料：計算總現金與總市值 ---
+            
+            # 1-A. 總現金
             acc_balances = logic.calculate_account_balances(df_raw)
-            # 使用 columns 顯示多個帳戶
-            b_cols = st.columns(len(acc_balances) if acc_balances else 1)
-            for idx, (acc, bal) in enumerate(acc_balances.items()):
-                if idx < len(b_cols):
-                    b_cols[idx].metric(acc, f"${int(bal):,}")
+            total_cash = sum(acc_balances.values())
+
+            # 1-B. 總股票市值 (需先計算 FIFO + 結合市價)
+            df_fifo = logic.calculate_fifo_report(df_raw)
+            total_market_value = 0
+            df_final = pd.DataFrame()
+
+            if not df_fifo.empty:
+                current_prices = st.session_state.get("realtime_prices", {})
+                # 呼叫 logic 計算損益與市值 (這裡會回傳完整的 df_final)
+                df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
+                total_market_value = df_final['股票市值'].sum()
+            
+            # --- 2. 計算資產與水位 ---
+            total_assets = total_cash + total_market_value
+            cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
+
+            # --- 3. 顯示資產配置概況 (取代舊的帳戶列表) ---
+            st.markdown("#### 💰 資產配置概況")
+            
+            # 決定現金水位顏色
+            if cash_ratio > 90:
+                ratio_color = "#FF4B4B" # 紅
+            elif 80 <= cash_ratio <= 90:
+                ratio_color = "#FFA500" # 橘
+            elif 70 <= cash_ratio < 80:
+                ratio_color = "#1E90FF" # 藍
+            elif 60 <= cash_ratio < 70:
+                ratio_color = "#FFD700" # 黃(金)
+            else:
+                ratio_color = "#09AB3B" # 綠
+
+            k1, k2, k3 = st.columns(3)
+            
+            k1.metric("總現金餘額", f"${int(total_cash):,}")
+            
+            # 使用 HTML 顯示自定義顏色的 Metric
+            k2.markdown(f"""
+                <div>
+                    <div style="font-size: 14px; color: rgba(250, 250, 250, 0.6); margin-bottom: 4px;">現金水位</div>
+                    <div style="font-size: 32px; font-weight: 600; color: {ratio_color};">{cash_ratio:.2f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+            k3.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
 
             st.divider()
 
-            df_fifo = logic.calculate_fifo_report(df_raw)
-            
-            if not df_fifo.empty:
-                current_prices = st.session_state.get("realtime_prices", {})
-                df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
+            # --- 4. 顯示股票部位 (FIFO 表格) ---
+            if not df_final.empty:
+                # 這裡繼續顯示股票部位的細節
+                total_stock_cost = df_final['總持有成本 (FIFO)'].sum()
+                total_stock_pnl = df_final['未實現損益'].sum()
+                total_stock_return = (total_stock_pnl / total_stock_cost * 100) if total_stock_cost != 0 else 0
                 
-                total_cost = df_final['總持有成本 (FIFO)'].sum()
-                total_market_value = df_final['股票市值'].sum()
-                total_pnl = df_final['未實現損益'].sum()
-                total_return = (total_pnl / total_cost * 100) if total_cost != 0 else 0
-                
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("總持有成本", f"${total_cost:,.0f}")
+                # 股票部位的小計
+                st.caption("股票部位損益")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("總持有成本", f"${total_stock_cost:,.0f}")
                 m2.metric("總股票市值", f"${total_market_value:,.0f}")
-                m3.metric("未實現損益", f"${total_pnl:,.0f}", delta=f"{total_return:.2f}%")
+                m3.metric("未實現損益", f"${total_stock_pnl:,.0f}", delta=f"{total_stock_return:.2f}%")
                 
                 def color_pnl(val):
                     if isinstance(val, (int, float)):
