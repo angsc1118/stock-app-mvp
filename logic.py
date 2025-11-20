@@ -2,7 +2,7 @@ import pandas as pd
 from collections import deque
 import uuid
 
-# --- 常數設定 ---
+# --- 常數設定 (與 GAS 保持一致) ---
 COMMISSION_RATE = 0.001425
 DISCOUNT = 0.6
 MIN_FEE = 1
@@ -49,7 +49,7 @@ def calculate_fifo_report(df):
     # 欄位對應 (須與 Google Sheet 表頭一致)
     col_date = '交易日期'
     col_id = '股票代號'
-    col_name = '股票名稱'  # 新增：讀取股票名稱
+    col_name = '股票名稱'  # 讀取欄位
     col_action = '交易類別'
     col_qty = '股數'
     col_price = '單價'
@@ -62,13 +62,13 @@ def calculate_fifo_report(df):
     df = df.sort_values(by=col_date).reset_index(drop=True)
     
     portfolio = {} 
-    names_map = {}  # 新增：用來記錄每個代號對應的名稱
+    names_map = {}  # 用來記錄每個代號對應的最新名稱
 
     for _, row in df.iterrows():
         sid = str(row.get(col_id, '')).strip()
         action = row.get(col_action, '')
         
-        # 記錄股票名稱 (取最新的或任一筆非空的名稱)
+        # 記錄股票名稱 (如果這一行有名稱，就記錄下來供後續報表使用)
         stock_name = str(row.get(col_name, '')).strip()
         if sid and stock_name:
             names_map[sid] = stock_name
@@ -86,22 +86,26 @@ def calculate_fifo_report(df):
         
         if sid not in portfolio: portfolio[sid] = deque()
 
+        # FIFO 核心邏輯
         if action in ['買進', '現金增資']:
             unit_cost = total_buy_cost / qty if qty > 0 else 0
             portfolio[sid].append({'qty': qty, 'unit_cost': unit_cost})
             
         elif action == '股票股利':
+            # 股票股利視為零成本(或僅含微量費用)進貨
             portfolio[sid].append({'qty': qty, 'unit_cost': (fee+other)/qty if qty>0 else 0})
 
         elif action == '賣出':
             sell_qty = qty
             while sell_qty > 0 and portfolio[sid]:
-                batch = portfolio[sid].popleft()
+                batch = portfolio[sid].popleft() # 取出最早的一批
                 if batch['qty'] > sell_qty:
+                    # 該批庫存夠賣，扣除後把剩餘的塞回頭部
                     batch['qty'] -= sell_qty
                     portfolio[sid].appendleft(batch)
                     sell_qty = 0
                 else:
+                    # 該批庫存不夠賣，整批消滅
                     sell_qty -= batch['qty']
     
     # 整理報表
@@ -112,7 +116,7 @@ def calculate_fifo_report(df):
             total_cost = sum(b['qty'] * b['unit_cost'] for b in batches)
             report_data.append({
                 '股票代號': sid,
-                '股票名稱': names_map.get(sid, '未命名'), # 新增：加入名稱欄位
+                '股票名稱': names_map.get(sid, '未命名'), # 填入名稱
                 '庫存股數': int(total_shares),
                 '總持有成本 (FIFO)': int(total_cost),
                 '平均成本': round(total_cost / total_shares, 2)
