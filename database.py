@@ -7,7 +7,7 @@ import logic  # 匯入邏輯層
 # --- 常數設定 ---
 SHEET_NAME = '交易紀錄'
 INDEX_SHEET_NAME = 'INDEX'
-ACCOUNT_SHEET_NAME = '交割帳戶設定' # 新增：帳戶設定頁籤
+ACCOUNT_SHEET_NAME = '交割帳戶設定'
 
 # --- 連線核心 ---
 @st.cache_resource
@@ -53,34 +53,42 @@ def get_stock_info_map():
         print(f"Warning: 讀取 INDEX 表失敗: {e}")
         return {}
 
-# --- 新增：讀取帳戶選單 ---
+# --- 修改：讀取帳戶與折數 ---
 @st.cache_data(ttl=3600)
-def get_account_options():
+def get_account_settings():
     """
-    讀取 '交割帳戶設定' 的 A 欄 (帳戶名稱)，回傳列表
+    讀取 '交割帳戶設定' 表，回傳 { '帳戶名稱': 折數 } 的字典
+    例如: { '元大-敦化': 0.6, '富邦': 0.168 }
     """
     try:
         ws = get_worksheet(ACCOUNT_SHEET_NAME)
-        # 讀取第一欄 (col_values(1))
-        # 假設 A1 是標題 '帳戶名稱'，從 A2 開始是資料
-        col_values = ws.col_values(1)
+        # 使用 get_all_records 讀取，自動將第一列作為 Key
+        data = ws.get_all_records()
         
-        # 移除標題 (如果第一行是標題)
-        if col_values and (col_values[0] == '帳戶名稱' or col_values[0] == 'Account'):
-            accounts = col_values[1:]
-        else:
-            accounts = col_values
+        account_map = {}
+        for row in data:
+            # 嘗試讀取欄位，相容不同的命名習慣
+            name = str(row.get('帳戶名稱', row.get('Account', ''))).strip()
             
-        # 過濾空值並去空白
-        valid_accounts = [acc.strip() for acc in accounts if acc.strip()]
-        
-        if not valid_accounts:
-            return ["預設帳戶"] # 避免空清單導致錯誤
+            # 讀取折數，若無則預設為 0.6 (或 1.0，視您需求)
+            discount_val = row.get('手續費折數', row.get('Discount', 0.6))
             
-        return valid_accounts
+            # 確保折數是數字
+            try:
+                discount = float(discount_val)
+            except:
+                discount = 0.6 # 轉換失敗的預設值
+
+            if name:
+                account_map[name] = discount
+                
+        if not account_map:
+            return {"預設帳戶": 0.6}
+            
+        return account_map
     except Exception as e:
         print(f"Warning: 讀取帳戶表失敗: {e}")
-        return ["無法讀取帳戶"]
+        return {"無法讀取帳戶": 1.0}
 
 # --- 既有功能：讀取交易紀錄 ---
 def load_data():
@@ -88,10 +96,13 @@ def load_data():
     data = ws.get_all_records()
     return pd.DataFrame(data)
 
-# --- 既有功能：儲存交易 ---
-def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes):
+# --- 修改：儲存交易 (增加 discount 參數) ---
+def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
-    fees = logic.calculate_fees(qty, price, action)
+    
+    # 1. 將折數傳給邏輯層計算
+    fees = logic.calculate_fees(qty, price, action, discount)
+    
     txn_id = logic.generate_txn_id()
     
     row_data = [
