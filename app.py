@@ -36,7 +36,7 @@ try:
     st.success(f"✅ 成功讀取！共有 {len(df)} 筆資料")
 
     st.subheader("前 5 筆交易紀錄：")
-    st.dataframe(df.head(5))
+    st.dataframe(df.head(30))
 
 except Exception as e:
     st.error(f"❌ 發生錯誤: {e}")
