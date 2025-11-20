@@ -25,7 +25,7 @@ def get_worksheet():
     client = gspread.authorize(creds)
     
     # 請確認這裡的 URL 是正確的
-    sheet_url = "https://docs.google.com/spreadsheets/d/您的試算表ID/edit" 
+    sheet_url = "https://docs.google.com/spreadsheets/d/1H0qIDR1cQdLaPkr2cQLiISP-wUgwy2y45AxhetnZ0zo/edit" 
     sheet = client.open_by_url(sheet_url)
     return sheet.worksheet(SHEET_NAME)
 
