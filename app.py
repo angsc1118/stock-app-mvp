@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime # 匯入 datetime 以顯示時間
+from datetime import date, datetime
 
 import database
 import logic
@@ -16,17 +16,22 @@ except:
     stock_map = {}
 
 try:
-    account_options = database.get_account_options()
+    # 修改：讀取帳戶設定字典 { '帳戶名': 折數 }
+    account_settings = database.get_account_settings()
+    account_list = list(account_settings.keys())
 except:
-    account_options = ["預設帳戶"]
+    account_settings = {"預設帳戶": 0.6}
+    account_list = ["預設帳戶"]
 
 # --- Session State 初始化 ---
-# 表單狀態
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
+
+# 帳戶初始化
 if "txn_account" not in st.session_state: 
-    st.session_state["txn_account"] = account_options[0] if account_options else ""
-if st.session_state["txn_account"] not in account_options:
-     st.session_state["txn_account"] = account_options[0] if account_options else ""
+    st.session_state["txn_account"] = account_list[0] if account_list else ""
+if st.session_state["txn_account"] not in account_list:
+     st.session_state["txn_account"] = account_list[0] if account_list else ""
+
 if "txn_stock_id" not in st.session_state: st.session_state["txn_stock_id"] = ""
 if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] = ""
 if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
@@ -34,7 +39,6 @@ if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 if "form_msg" not in st.session_state: st.session_state["form_msg"] = None 
 
-# 即時股價狀態 (新增)
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
 
@@ -48,6 +52,9 @@ def submit_callback():
     s_qty = st.session_state.txn_qty
     s_price = st.session_state.txn_price
     s_notes = st.session_state.txn_notes
+    
+    # 從設定中取得該帳戶的折數 (若找不到則用預設 0.6)
+    s_discount = account_settings.get(s_account, 0.6)
 
     error_msgs = []
     if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
@@ -60,13 +67,15 @@ def submit_callback():
         st.session_state["form_msg"] = {"type": "error", "content": error_msgs}
     else:
         try:
-            database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes)
+            # 傳入 s_discount
+            database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
+            
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
-            st.session_state["form_msg"] = {"type": "success", "content": f"✅ 成功新增：{s_name} ({s_id}) {s_action}"}
+            st.session_state["form_msg"] = {"type": "success", "content": f"✅ 成功新增：{s_name} ({s_id}) {s_action} (折數: {s_discount})"}
         except Exception as e:
             st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
 
@@ -75,7 +84,7 @@ with st.sidebar:
     st.header("📝 新增交易")
     col1, col2 = st.columns(2)
     col1.date_input("交易日期", key="txn_date")
-    col2.selectbox("交易帳戶", options=account_options, key="txn_account")
+    col2.selectbox("交易帳戶", options=account_list, key="txn_account")
     input_stock_id = col1.text_input("股票代號", placeholder="例如 2330", key="txn_stock_id")
     
     if input_stock_id:
@@ -107,24 +116,18 @@ try:
     with tab1:
         st.subheader("庫存損益試算 (FIFO)")
         
-        # --- 手動更新股價區塊 ---
         col_btn, col_time = st.columns([1.5, 4])
         
-        # 按鈕：觸發 API 更新並寫入 State
         if col_btn.button("🔄 更新即時股價 (Fugle API)"):
              if not df_raw.empty:
-                # 先算出庫存才知道要查哪些股票
                 temp_fifo = logic.calculate_fifo_report(df_raw)
                 if not temp_fifo.empty:
                     stock_ids = temp_fifo['股票代號'].unique().tolist()
-                    # 呼叫 API
                     prices = market_data.get_realtime_prices(stock_ids)
-                    # 寫入 State
                     st.session_state["realtime_prices"] = prices
                     st.session_state["price_update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.rerun()
         
-        # 顯示更新時間
         if st.session_state["price_update_time"]:
             col_time.write(f"🕒 最後更新: **{st.session_state['price_update_time']}**")
         else:
@@ -134,12 +137,9 @@ try:
             df_fifo = logic.calculate_fifo_report(df_raw)
             
             if not df_fifo.empty:
-                # 使用 State 中的股價進行計算 (若無則為空字典，市價會是 0)
                 current_prices = st.session_state.get("realtime_prices", {})
-                
                 df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
                 
-                # --- 顯示區塊 ---
                 total_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_market_value = df_final['股票市值'].sum()
                 total_pnl = df_final['未實現損益'].sum()
@@ -156,13 +156,13 @@ try:
                         return f'color: {color}'
                     return ''
 
+                # 修改：顯示欄位，使用合併後的「股票」與新增的「賣出額外費用」
                 display_cols = [
-                    '股票代號', '股票名稱', '庫存股數', '平均成本', 
+                    '股票', '庫存股數', '平均成本', 
                     '目前市價', '股票市值', '未實現損益', '報酬率 (%)',
-                    '佔總資產比例 (%)', '配息金額'
+                    '佔總資產比例 (%)', '賣出額外費用', '配息金額'
                 ]
                 
-                # 針對不同欄位設定格式
                 format_dict = {
                     "庫存股數": "{:,.0f}",
                     "平均成本": "{:,.2f}",
@@ -172,6 +172,7 @@ try:
                     "報酬率 (%)": "{:,.2f}%",
                     "佔總資產比例 (%)": "{:,.2f}%",
                     "配息金額": "{:,.0f}"
+                    # 賣出額外費用 是字串，不需要在這裡 format
                 }
 
                 st.dataframe(
