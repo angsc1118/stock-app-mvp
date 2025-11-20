@@ -24,19 +24,16 @@ except:
 
 # --- Session State 初始化 ---
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
-
 if "txn_account" not in st.session_state: 
     st.session_state["txn_account"] = account_list[0] if account_list else ""
 if st.session_state["txn_account"] not in account_list:
      st.session_state["txn_account"] = account_list[0] if account_list else ""
-
 if "txn_stock_id" not in st.session_state: st.session_state["txn_stock_id"] = ""
 if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] = ""
 if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
 if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 if "form_msg" not in st.session_state: st.session_state["form_msg"] = None 
-
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
 
@@ -57,7 +54,6 @@ def submit_callback():
     if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
     
     is_cash_flow = s_action in ['入金', '出金']
-    
     if not is_cash_flow:
         if not s_id: error_msgs.append("❌ 請輸入「股票代號」")
         if not s_name: error_msgs.append("❌ 未輸入「股票名稱」")
@@ -72,27 +68,23 @@ def submit_callback():
     else:
         try:
             database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
-            
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
-            
             if is_cash_flow:
                 amount = int(s_qty * s_price)
                 st.session_state["form_msg"] = {"type": "success", "content": f"✅ 成功記錄：{s_action} ${amount:,} (帳戶: {s_account})"}
             else:
                 st.session_state["form_msg"] = {"type": "success", "content": f"✅ 成功新增：{s_name} ({s_id}) {s_action} (折數: {s_discount})"}
-                
         except Exception as e:
             st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
 
 # ============================
-# Sidebar 側邊欄
+# Sidebar
 # ============================
 with st.sidebar:
-    
     mode = st.radio("功能選擇", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
@@ -100,7 +92,6 @@ with st.sidebar:
         col1, col2 = st.columns(2)
         col1.date_input("交易日期", key="txn_date")
         col2.selectbox("交易帳戶", options=account_list, key="txn_account")
-        
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
         is_cash_op = input_action in ['入金', '出金']
 
@@ -125,52 +116,37 @@ with st.sidebar:
         col3, col4 = st.columns(2)
         qty_label = "數量 (預設1)" if is_cash_op else "股數"
         price_label = "金額" if is_cash_op else "單價"
-        
         if is_cash_op and st.session_state["txn_qty"] == 0:
             st.session_state["txn_qty"] = 1
 
         col3.number_input(qty_label, min_value=0, step=1000, key="txn_qty")
         col4.number_input(price_label, min_value=0.0, step=0.5, format="%.2f", key="txn_price")
-        
         st.text_area("備註", placeholder="選填", key="txn_notes")
         st.button("💾 提交交易", on_click=submit_callback)
         
     else:
         st.header("🔧 帳戶餘額校正")
-        st.info("此功能會自動計算差額，並產生一筆「入金」或「出金」將系統餘額強制調整為實際餘額。")
-        
+        st.info("自動計算差額並產生修正交易。")
         adj_account = st.selectbox("選擇校正帳戶", options=account_list)
-        
         try:
             df_temp = database.load_data()
             balances = logic.calculate_account_balances(df_temp)
             current_sys_bal = int(balances.get(adj_account, 0))
         except:
             current_sys_bal = 0
-            
         st.metric("💻 系統目前帳面餘額", f"${current_sys_bal:,}")
-        
         actual_bal = st.number_input("💰 輸入實際餘額", value=current_sys_bal, step=1000)
-        
         diff = actual_bal - current_sys_bal
-        
         if diff == 0:
-            st.success("✅ 帳目吻合，無需校正。")
+            st.success("✅ 帳目吻合。")
         else:
-            if diff > 0:
-                st.warning(f"系統少記了 ${diff:,} (需補入)")
-                action_type = "入金"
-            else:
-                st.warning(f"系統多記了 ${abs(diff):,} (需扣除)")
-                action_type = "出金"
-                
+            if diff > 0: st.warning(f"少記 ${diff:,} (需補入)")
+            else: st.warning(f"多記 ${abs(diff):,} (需扣除)")
             if st.button("⚡ 執行強制校正"):
                 try:
                     note = f"餘額校正: 系統(${current_sys_bal:,}) -> 實際(${actual_bal:,})"
-                    database.save_transaction(
-                        date.today(), "", "", action_type, 
-                        1, abs(diff), adj_account, note, 0.6
-                    )
+                    action_type = "入金" if diff > 0 else "出金"
+                    database.save_transaction(date.today(), "", "", action_type, 1, abs(diff), adj_account, note, 0.6)
                     st.success(f"已新增校正紀錄：{action_type} ${abs(diff):,}")
                     st.rerun()
                 except Exception as e:
@@ -182,9 +158,8 @@ with st.sidebar:
         elif msg["type"] == "error": 
             for err in msg["content"]: st.error(err)
 
-
 # ============================
-# Main Content 主畫面
+# Main Content
 # ============================
 tab1, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📋 原始交易紀錄"])
 
@@ -195,7 +170,6 @@ try:
         st.subheader("庫存損益試算 (FIFO)")
         
         col_btn, col_time = st.columns([1.5, 4])
-        
         if col_btn.button("🔄 更新即時股價 (Fugle API)"):
              if not df_raw.empty:
                 temp_fifo = logic.calculate_fifo_report(df_raw)
@@ -212,13 +186,10 @@ try:
             col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
         if not df_raw.empty:
-            # --- 1. 準備資料 ---
-            
-            # 1-A. 總現金
+            # --- 資產計算 ---
             acc_balances = logic.calculate_account_balances(df_raw)
             total_cash = sum(acc_balances.values())
 
-            # 1-B. 總股票市值
             df_fifo = logic.calculate_fifo_report(df_raw)
             total_market_value = 0
             df_final = pd.DataFrame()
@@ -228,23 +199,44 @@ try:
                 df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
                 total_market_value = df_final['股票市值'].sum()
             
-            # --- 2. 計算資產與水位 ---
             total_assets = total_cash + total_market_value
             cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-            # --- 3. 顯示資產配置概況 (修正順序) ---
+            # --- 顯示資產概況 (修正順序與顏色) ---
             st.markdown("#### 💰 資產配置概況")
             
-            # 順序：總資產 -> 現金餘額 -> 現金水位
+            # 決定顏色邏輯 (用於 delta_color 屬性或 CSS)
+            # >90 紅, 80-90 橘, 70-80 藍, 60-70 黃, <60 綠
+            # 因為 st.metric 的 delta_color 只有 normal, inverse, off
+            # 我們改用字串的顏色標記放到 value 中? 不行，metric value 只能是字串
+            # 依照您的需求：現金水位本身字體黑色，但顏色邏輯要呈現?
+            # 您的需求：「若大於90% 則該欄位為紅字...」
+            # 我們可以用 st.markdown 搭配 HTML 來實現該欄位的特定顏色
+            
+            if cash_ratio > 90: ratio_color = "#FF4B4B" # 紅
+            elif 80 <= cash_ratio < 90: ratio_color = "#FFA500" # 橘
+            elif 70 <= cash_ratio < 80: ratio_color = "#1E90FF" # 藍
+            elif 60 <= cash_ratio < 70: ratio_color = "#FFD700" # 黃
+            else: ratio_color = "#09AB3B" # 綠
+
             k1, k2, k3 = st.columns(3)
             
+            # 1. 總資產
             k1.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
+            
+            # 2. 現金餘額
             k2.metric("總現金餘額", f"${int(total_cash):,}")
-            k3.metric("現金水位", f"{cash_ratio:.2f}%") # 恢復預設顏色
+            
+            # 3. 現金水位 (使用 HTML 來自定義顏色)
+            k3.markdown(f"""
+                <div>
+                    <div style="font-size: 14px; color: rgba(49, 51, 63, 0.6); margin-bottom: 4px;">現金水位</div>
+                    <div style="font-size: 32px; font-weight: 600; color: {ratio_color};">{cash_ratio:.2f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
 
             st.divider()
 
-            # --- 4. 顯示股票部位 (FIFO 表格) ---
             if not df_final.empty:
                 total_stock_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_stock_pnl = df_final['未實現損益'].sum()
