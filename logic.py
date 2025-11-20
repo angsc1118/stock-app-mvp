@@ -59,6 +59,19 @@ def generate_txn_id():
     """產生唯一交易 ID"""
     return f"TXN-{str(uuid.uuid4())[:8].upper()}"
 
+def _safe_float(value):
+    """輔助函式：安全轉換字串為浮點數 (處理逗號)"""
+    try:
+        if isinstance(value, (int, float)):
+            return float(value)
+        # 處理字串中的逗號
+        clean_val = str(value).replace(',', '').strip()
+        if not clean_val:
+            return 0.0
+        return float(clean_val)
+    except:
+        return 0.0
+
 def calculate_fifo_report(df):
     """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame"""
     col_date = '交易日期'
@@ -90,14 +103,12 @@ def calculate_fifo_report(df):
         if sid and stock_name:
             names_map[sid] = stock_name
         
-        try:
-            qty = float(row[col_qty]) if row[col_qty] != '' else 0
-            price = float(row[col_price]) if row[col_price] != '' else 0
-            fee = float(row[col_fee]) if row[col_fee] != '' else 0
-            tax = float(row[col_tax]) if row[col_tax] != '' else 0
-            other = float(row[col_other]) if row[col_other] != '' else 0
-        except:
-            continue
+        # 使用 _safe_float 處理數值，避免 "1,000" 導致錯誤
+        qty = _safe_float(row.get(col_qty))
+        price = _safe_float(row.get(col_price))
+        fee = _safe_float(row.get(col_fee))
+        tax = _safe_float(row.get(col_tax))
+        other = _safe_float(row.get(col_other))
 
         total_buy_cost = (qty * price) + fee + other
         
@@ -191,24 +202,21 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
 def calculate_account_balances(df):
     """
     統計各帳戶的現金餘額
-    Input: 交易紀錄 DataFrame
-    Output: { '元大': 50000, '富邦': 120000 }
+    修正：加入逗號移除邏輯，確保字串能正確轉為數字
     """
     if df.empty:
         return {}
 
-    # 確保欄位名稱正確 (對應 database save_transaction 的順序)
-    # 假設您的 Sheet 欄位名稱為 '交易帳戶' 和 '淨收付金額'
     col_account = '交易帳戶'
     col_net_cash = '淨收付金額'
 
     if col_account not in df.columns or col_net_cash not in df.columns:
         return {}
 
-    # 轉型並填補空值 (這行需要 pd，所以 import pandas as pd 必須在檔案最開頭)
+    # 重要修正：先轉字串 -> 移除逗號 -> 再轉數值
+    df[col_net_cash] = df[col_net_cash].astype(str).str.replace(',', '', regex=False)
     df[col_net_cash] = pd.to_numeric(df[col_net_cash], errors='coerce').fillna(0)
     
-    # GroupBy 加總
     balances = df.groupby(col_account)[col_net_cash].sum().to_dict()
     
     return balances
