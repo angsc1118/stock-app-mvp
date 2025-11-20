@@ -4,26 +4,30 @@ import uuid
 
 # --- 常數設定 ---
 COMMISSION_RATE = 0.001425
-# DISCOUNT = 0.6  <-- 移除這行，改由參數傳入
 MIN_FEE = 1
-TAX_RATE = 0.003
+TAX_RATE = 0.003       # 一般股票交易稅
+ETF_TAX_RATE = 0.001   # ETF 交易稅 (新增)
 
-# 修改：新增 discount 參數
-def calculate_fees(qty, price, action, discount=1.0):
+def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     """
     計算單筆交易的費用與淨收付
-    discount: 手續費折數 (ex: 0.6, 0.28, 0.168)
+    discount: 手續費折數
+    stock_id: 股票代號 (用來判斷是否為 ETF)
     """
     gross_amount = int(qty * price)
     
-    # 手續費：使用傳入的 discount 計算
+    # 手續費
     raw_commission = int(gross_amount * COMMISSION_RATE * discount)
-    
-    # 最低手續費通常是 20 元 (不同券商不同，這裡維持您的設定 1 元或您可自行調整)
     commission = max(raw_commission, MIN_FEE) if gross_amount > 0 else 0
     
-    # 交易稅
-    tax = int(gross_amount * TAX_RATE) if action == '賣出' else 0
+    # 交易稅 (賣出才收)
+    tax = 0
+    if action == '賣出':
+        # 判斷是否為 ETF (代號以 00 開頭)
+        # 轉為字串並去空白，避免型別錯誤
+        clean_id = str(stock_id).strip()
+        current_tax_rate = ETF_TAX_RATE if clean_id.startswith("00") else TAX_RATE
+        tax = int(gross_amount * current_tax_rate)
     
     other_fees = 0
     total_fees = commission + tax + other_fees
@@ -123,16 +127,15 @@ def calculate_fifo_report(df):
 
 def calculate_unrealized_pnl(df_fifo, current_price_map):
     """
-    接收 FIFO 庫存表與即時股價，計算未實現損益、總資產比例
-    並處理欄位顯示格式
+    接收 FIFO 庫存表與即時股價，計算未實現損益
     """
     if df_fifo.empty:
         return df_fifo
 
-    # 1. 合併股票名稱與代號 -> "台積電(2330)"
+    # 1. 合併股票名稱與代號
     df_fifo['股票'] = df_fifo.apply(lambda row: f"{row['股票名稱']}({row['股票代號']})", axis=1)
 
-    # 2. 填入市價 (若無報價則補 0)
+    # 2. 填入市價
     df_fifo['目前市價'] = df_fifo['股票代號'].map(current_price_map).fillna(0)
     
     # 3. 計算市值
@@ -154,22 +157,23 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
         axis=1
     )
     
-    # 7. 配息金額 (預設 0)
+    # 7. 配息金額
     df_fifo['配息金額'] = 0
 
-    # 8. 新增：賣出額外費用 (估算)
-    # 邏輯：手續費(0.6折) + 交易稅
+    # 8. 賣出額外費用 (估算)
     def calc_est_sell_fees(row):
         market_value = int(row['股票市值'])
+        stock_id = str(row['股票代號']).strip()
+        
         if market_value == 0:
             return "0 (0+0)"
         
-        # 交易稅 (0.3%)
-        tax = int(market_value * TAX_RATE)
+        # 判斷 ETF 稅率
+        current_tax_rate = ETF_TAX_RATE if stock_id.startswith("00") else TAX_RATE
+        tax = int(market_value * current_tax_rate)
         
-        # 手續費 (估算使用通用 0.6 折，因無法區分每個帳戶)
-        est_discount = 0.6 
-        raw_comm = int(market_value * COMMISSION_RATE * est_discount)
+        # 手續費 (不打折)
+        raw_comm = int(market_value * COMMISSION_RATE)
         comm = max(raw_comm, MIN_FEE)
         
         total = tax + comm
