@@ -10,35 +10,42 @@ import logic
 st.set_page_config(page_title="股票資產管理", layout="wide")
 st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 
-# --- 0. 預先讀取股票代碼表 ---
+# --- 預先讀取資料 (股票代碼表 & 帳戶清單) ---
 try:
     stock_map = database.get_stock_info_map()
 except Exception as e:
     st.toast(f"⚠️ 無法讀取 INDEX 表: {e}")
     stock_map = {}
 
+try:
+    # 讀取帳戶清單
+    account_options = database.get_account_options()
+except Exception as e:
+    st.toast(f"⚠️ 無法讀取帳戶設定: {e}")
+    account_options = ["預設帳戶"]
+
 # --- 初始化 Session State ---
-# 這是為了儲存表單的狀態與訊息
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
-if "txn_account" not in st.session_state: st.session_state["txn_account"] = ""
+
+# 帳戶初始化：預設使用清單中的第一個帳戶 (如果之前沒選過)
+if "txn_account" not in st.session_state: 
+    st.session_state["txn_account"] = account_options[0] if account_options else ""
+
+# 確保 session 中的帳戶值有效 (防止清單變更後，舊的 session 值不在清單中報錯)
+if st.session_state["txn_account"] not in account_options:
+     st.session_state["txn_account"] = account_options[0] if account_options else ""
+
 if "txn_stock_id" not in st.session_state: st.session_state["txn_stock_id"] = ""
 if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] = ""
 if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
 if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
-# 用來顯示操作結果的訊息 (因為 Rerun 後 st.success 的內容會消失，需存在 State 中)
 if "form_msg" not in st.session_state: st.session_state["form_msg"] = None 
 
-# --- 定義提交按鈕的 Callback (關鍵修正) ---
+# --- 定義提交按鈕的 Callback ---
 def submit_callback():
-    """
-    此函式會在按鈕點擊後、畫面重新渲染前執行。
-    在此處讀取並修改 session_state 是安全的，不會報錯。
-    """
-    # 1. 從 Session State 讀取目前的值
-    # 注意：這裡不使用 input_xxx 變數，而是直接讀 state
     s_date = st.session_state.txn_date
-    s_account = st.session_state.txn_account
+    s_account = st.session_state.txn_account # 這裡會讀到 selectbox 選中的值
     s_id = st.session_state.txn_stock_id
     s_name = st.session_state.txn_stock_name
     s_action = st.session_state.txn_action
@@ -48,7 +55,7 @@ def submit_callback():
 
     # 2. 資料驗證
     error_msgs = []
-    if not s_account: error_msgs.append("❌ 請輸入「交易帳戶」")
+    if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
     if not s_id: error_msgs.append("❌ 請輸入「股票代號」")
     if not s_name: error_msgs.append("❌ 未輸入「股票名稱」")
     
@@ -58,7 +65,6 @@ def submit_callback():
         error_msgs.append("❌ 「單價」必須大於 0")
 
     if error_msgs:
-        # 將錯誤存入 State，待會顯示
         st.session_state["form_msg"] = {"type": "error", "content": error_msgs}
     else:
         try:
@@ -67,14 +73,13 @@ def submit_callback():
                 s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes
             )
             
-            # 4. 寫入成功：清空輸入欄位 (除了日期與帳戶)
+            # 4. 寫入成功：清空輸入欄位 (保留日期與帳戶)
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
             
-            # 設定成功訊息
             st.session_state["form_msg"] = {
                 "type": "success", 
                 "content": f"✅ 成功新增：{s_name} ({s_id}) {s_action}"
@@ -93,19 +98,17 @@ with st.sidebar:
     # 1. 日期
     col1.date_input("交易日期", key="txn_date")
     
-    # 2. 帳戶
-    col2.text_input("交易帳戶", placeholder="請輸入帳戶名稱", key="txn_account")
+    # 2. 帳戶 (改為下拉選單)
+    # 注意：這裡直接使用讀取到的 account_options
+    col2.selectbox("交易帳戶", options=account_options, key="txn_account")
     
-    # 3. 股票代號 (支援自動查詢)
+    # 3. 股票代號
     input_stock_id = col1.text_input("股票代號", placeholder="例如 2330", key="txn_stock_id")
     
     # --- 自動查詢邏輯 ---
-    # 當代號變更時，嘗試更新名稱
-    # 注意：這裡的 session_state 修改是安全的，因為 txn_stock_name 的 widget 還沒被建立
     if input_stock_id:
         clean_id = str(input_stock_id).strip()
         found_name = stock_map.get(clean_id, "")
-        # 只有當查到的名稱不同時才更新，避免無窮迴圈
         if found_name and st.session_state["txn_stock_name"] != found_name:
             st.session_state["txn_stock_name"] = found_name
             st.rerun()
@@ -124,12 +127,10 @@ with st.sidebar:
     
     st.text_area("備註", placeholder="選填", key="txn_notes")
     
-    # --- C. 送出按鈕 (綁定 Callback) ---
-    # 這是解決 "cannot be modified after instantiated" 的關鍵
+    # --- C. 送出按鈕 ---
     st.button("💾 提交交易", on_click=submit_callback)
 
     # --- D. 顯示訊息 ---
-    # 檢查 State 中是否有來自 Callback 的訊息
     if st.session_state["form_msg"]:
         msg = st.session_state["form_msg"]
         if msg["type"] == "success":
@@ -137,8 +138,6 @@ with st.sidebar:
         elif msg["type"] == "error":
             for err in msg["content"]:
                 st.error(err)
-        # 顯示完後可以選擇清空，或者保留直到下一次操作
-        # 這裡我們選擇不清空，讓使用者能看到結果，直到按下新的按鈕覆蓋它
 
 # --- 2. 主畫面：顯示區 (維持不變) ---
 tab1, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📋 原始交易紀錄"])
