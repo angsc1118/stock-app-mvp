@@ -114,7 +114,7 @@ with st.sidebar:
             st.rerun()
 
     # 4. 股票名稱
-    col2.text_input("股票名稱", placeholder="自動帶入或手動輸入", key="txn_stock_name")
+    col2.text_input("股票名稱",  key="txn_stock_name")
     
     # 5. 交易類別
     st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利'], key="txn_action")
