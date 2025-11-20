@@ -124,33 +124,57 @@ def calculate_fifo_report(df):
 def calculate_unrealized_pnl(df_fifo, current_price_map):
     """
     接收 FIFO 庫存表與即時股價，計算未實現損益、總資產比例
+    並處理欄位顯示格式
     """
     if df_fifo.empty:
         return df_fifo
 
-    # 1. 填入市價 (若無報價則補 0)
+    # 1. 合併股票名稱與代號 -> "台積電(2330)"
+    df_fifo['股票'] = df_fifo.apply(lambda row: f"{row['股票名稱']}({row['股票代號']})", axis=1)
+
+    # 2. 填入市價 (若無報價則補 0)
     df_fifo['目前市價'] = df_fifo['股票代號'].map(current_price_map).fillna(0)
     
-    # 2. 計算市值
+    # 3. 計算市值
     df_fifo['股票市值'] = df_fifo.apply(lambda row: row['庫存股數'] * row['目前市價'], axis=1)
     
-    # 3. 計算未實現損益
+    # 4. 計算未實現損益
     df_fifo['未實現損益'] = df_fifo['股票市值'] - df_fifo['總持有成本 (FIFO)']
     
-    # 4. 計算報酬率 (%)
+    # 5. 計算報酬率 (%)
     df_fifo['報酬率 (%)'] = df_fifo.apply(
         lambda row: 0 if row['總持有成本 (FIFO)'] == 0 else (row['未實現損益'] / row['總持有成本 (FIFO)']) * 100,
         axis=1
     )
     
-    # 5. 新增：計算佔總資產比例 (%)
+    # 6. 計算佔總資產比例 (%)
     total_market_value = df_fifo['股票市值'].sum()
     df_fifo['佔總資產比例 (%)'] = df_fifo.apply(
         lambda row: 0 if total_market_value == 0 else (row['股票市值'] / total_market_value) * 100,
         axis=1
     )
     
-    # 6. 新增：配息金額 (保留欄位，預設為 0)
+    # 7. 配息金額 (預設 0)
     df_fifo['配息金額'] = 0
+
+    # 8. 新增：賣出額外費用 (估算)
+    # 邏輯：手續費(0.6折) + 交易稅
+    def calc_est_sell_fees(row):
+        market_value = int(row['股票市值'])
+        if market_value == 0:
+            return "0 (0+0)"
+        
+        # 交易稅 (0.3%)
+        tax = int(market_value * TAX_RATE)
+        
+        # 手續費 (估算使用通用 0.6 折，因無法區分每個帳戶)
+        est_discount = 0.6 
+        raw_comm = int(market_value * COMMISSION_RATE * est_discount)
+        comm = max(raw_comm, MIN_FEE)
+        
+        total = tax + comm
+        return f"{total} ({comm}+{tax})"
+
+    df_fifo['賣出額外費用'] = df_fifo.apply(calc_est_sell_fees, axis=1)
     
     return df_fifo
