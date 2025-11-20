@@ -4,16 +4,22 @@ import uuid
 
 # --- 常數設定 ---
 COMMISSION_RATE = 0.001425
-DISCOUNT = 0.6
+# DISCOUNT = 0.6  <-- 移除這行，改由參數傳入
 MIN_FEE = 1
 TAX_RATE = 0.003
 
-def calculate_fees(qty, price, action):
-    """計算單筆交易的費用與淨收付"""
+# 修改：新增 discount 參數
+def calculate_fees(qty, price, action, discount=1.0):
+    """
+    計算單筆交易的費用與淨收付
+    discount: 手續費折數 (ex: 0.6, 0.28, 0.168)
+    """
     gross_amount = int(qty * price)
     
-    # 手續費
-    raw_commission = int(gross_amount * COMMISSION_RATE * DISCOUNT)
+    # 手續費：使用傳入的 discount 計算
+    raw_commission = int(gross_amount * COMMISSION_RATE * discount)
+    
+    # 最低手續費通常是 20 元 (不同券商不同，這裡維持您的設定 1 元或您可自行調整)
     commission = max(raw_commission, MIN_FEE) if gross_amount > 0 else 0
     
     # 交易稅
@@ -115,7 +121,6 @@ def calculate_fifo_report(df):
     
     return pd.DataFrame(report_data)
 
-# --- 修改：計算未實現損益 (新增比例欄位) ---
 def calculate_unrealized_pnl(df_fifo, current_price_map):
     """
     接收 FIFO 庫存表與即時股價，計算未實現損益、總資產比例
