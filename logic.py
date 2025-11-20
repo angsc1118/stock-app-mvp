@@ -123,3 +123,33 @@ def calculate_fifo_report(df):
             })
     
     return pd.DataFrame(report_data)
+
+# --- 新增：計算未實現損益 (結合市價) ---
+def calculate_unrealized_pnl(df_fifo, current_price_map):
+    """
+    接收 FIFO 庫存表與即時股價，計算未實現損益
+    df_fifo: calculate_fifo_report 的產出
+    current_price_map: { '2330': 1050.0, '0050': 150.0 }
+    """
+    if df_fifo.empty:
+        return df_fifo
+
+    # 建立新欄位 (預設為 0 或 NaN)
+    df_fifo['目前市價'] = df_fifo['股票代號'].map(current_price_map).fillna(0)
+    
+    # 計算市值與損益
+    # 股票市值 = 庫存股數 * 目前市價
+    df_fifo['股票市值'] = df_fifo.apply(
+        lambda row: row['庫存股數'] * row['目前市價'], axis=1
+    )
+    
+    # 未實現損益 = 股票市值 - 總持有成本
+    df_fifo['未實現損益'] = df_fifo['股票市值'] - df_fifo['總持有成本 (FIFO)']
+    
+    # 報酬率 (%) = 未實現損益 / 總持有成本 * 100
+    df_fifo['報酬率 (%)'] = df_fifo.apply(
+        lambda row: 0 if row['總持有成本 (FIFO)'] == 0 else (row['未實現損益'] / row['總持有成本 (FIFO)']) * 100,
+        axis=1
+    )
+    
+    return df_fifo
