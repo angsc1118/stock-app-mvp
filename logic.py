@@ -1,4 +1,3 @@
-# logic.py
 import pandas as pd
 from collections import deque
 import uuid
@@ -46,10 +45,11 @@ def generate_txn_id():
     return f"TXN-{str(uuid.uuid4())[:8].upper()}"
 
 def calculate_fifo_report(df):
-    """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame"""
+    """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame (含股票名稱)"""
     # 欄位對應 (須與 Google Sheet 表頭一致)
     col_date = '交易日期'
     col_id = '股票代號'
+    col_name = '股票名稱'  # 新增：讀取股票名稱
     col_action = '交易類別'
     col_qty = '股數'
     col_price = '單價'
@@ -62,10 +62,16 @@ def calculate_fifo_report(df):
     df = df.sort_values(by=col_date).reset_index(drop=True)
     
     portfolio = {} 
+    names_map = {}  # 新增：用來記錄每個代號對應的名稱
 
     for _, row in df.iterrows():
-        sid = str(row[col_id])
-        action = row[col_action]
+        sid = str(row.get(col_id, '')).strip()
+        action = row.get(col_action, '')
+        
+        # 記錄股票名稱 (取最新的或任一筆非空的名稱)
+        stock_name = str(row.get(col_name, '')).strip()
+        if sid and stock_name:
+            names_map[sid] = stock_name
         
         try:
             qty = float(row[col_qty]) if row[col_qty] != '' else 0
@@ -106,6 +112,7 @@ def calculate_fifo_report(df):
             total_cost = sum(b['qty'] * b['unit_cost'] for b in batches)
             report_data.append({
                 '股票代號': sid,
+                '股票名稱': names_map.get(sid, '未命名'), # 新增：加入名稱欄位
                 '庫存股數': int(total_shares),
                 '總持有成本 (FIFO)': int(total_cost),
                 '平均成本': round(total_cost / total_shares, 2)
