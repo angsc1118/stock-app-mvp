@@ -1,30 +1,27 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+from datetime import date, datetime # 匯入 datetime 以顯示時間
 
-# 匯入自定義模組
 import database
 import logic
-import market_data # 新增：匯入市場數據模組
+import market_data
 
-# 頁面設定
 st.set_page_config(page_title="股票資產管理", layout="wide")
 st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 
-# ... (保留原本的 預先讀取資料 Try-Catch 區塊) ...
+# --- 預先讀取 ---
 try:
     stock_map = database.get_stock_info_map()
-except Exception as e:
-    st.toast(f"⚠️ 無法讀取 INDEX 表: {e}")
+except:
     stock_map = {}
 
 try:
     account_options = database.get_account_options()
-except Exception as e:
-    st.toast(f"⚠️ 無法讀取帳戶設定: {e}")
+except:
     account_options = ["預設帳戶"]
 
-# ... (保留原本的 Session State 初始化區塊) ...
+# --- Session State 初始化 ---
+# 表單狀態
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
 if "txn_account" not in st.session_state: 
     st.session_state["txn_account"] = account_options[0] if account_options else ""
@@ -37,7 +34,11 @@ if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 if "form_msg" not in st.session_state: st.session_state["form_msg"] = None 
 
-# ... (保留 submit_callback 函式) ...
+# 即時股價狀態 (新增)
+if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
+if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
+
+# --- Callback ---
 def submit_callback():
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
@@ -69,7 +70,7 @@ def submit_callback():
         except Exception as e:
             st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
 
-# ... (保留 側邊欄 Sidebar UI 區塊) ...
+# --- Sidebar ---
 with st.sidebar:
     st.header("📝 新增交易")
     col1, col2 = st.columns(2)
@@ -97,8 +98,7 @@ with st.sidebar:
         elif msg["type"] == "error": 
             for err in msg["content"]: st.error(err)
 
-
-# --- 主畫面：顯示區 ---
+# --- Main Content ---
 tab1, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📋 原始交易紀錄"])
 
 try:
@@ -107,29 +107,39 @@ try:
     with tab1:
         st.subheader("庫存損益試算 (FIFO)")
         
-        # 更新即時股價按鈕
-        if st.button("🔄 更新即時股價 (Fugle API)"):
-            st.cache_data.clear() 
-            st.rerun()
+        # --- 手動更新股價區塊 ---
+        col_btn, col_time = st.columns([1.5, 4])
+        
+        # 按鈕：觸發 API 更新並寫入 State
+        if col_btn.button("🔄 更新即時股價 (Fugle API)"):
+             if not df_raw.empty:
+                # 先算出庫存才知道要查哪些股票
+                temp_fifo = logic.calculate_fifo_report(df_raw)
+                if not temp_fifo.empty:
+                    stock_ids = temp_fifo['股票代號'].unique().tolist()
+                    # 呼叫 API
+                    prices = market_data.get_realtime_prices(stock_ids)
+                    # 寫入 State
+                    st.session_state["realtime_prices"] = prices
+                    st.session_state["price_update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.rerun()
+        
+        # 顯示更新時間
+        if st.session_state["price_update_time"]:
+            col_time.write(f"🕒 最後更新: **{st.session_state['price_update_time']}**")
+        else:
+            col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
         if not df_raw.empty:
-            # 1. 基礎 FIFO 計算
             df_fifo = logic.calculate_fifo_report(df_raw)
             
             if not df_fifo.empty:
-                # 2. 取得庫存代號列表
-                stock_ids = df_fifo['股票代號'].unique().tolist()
+                # 使用 State 中的股價進行計算 (若無則為空字典，市價會是 0)
+                current_prices = st.session_state.get("realtime_prices", {})
                 
-                # 3. 呼叫市場數據模組 (Real Logic)
-                # 注意：這裡改用 market_data 模組
-                price_map = market_data.get_realtime_prices(stock_ids)
-                
-                # 4. 結合 FIFO 與 市價 算出最終損益
-                df_final = logic.calculate_unrealized_pnl(df_fifo, price_map)
+                df_final = logic.calculate_unrealized_pnl(df_fifo, current_prices)
                 
                 # --- 顯示區塊 ---
-                
-                # 總計指標
                 total_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_market_value = df_final['股票市值'].sum()
                 total_pnl = df_final['未實現損益'].sum()
@@ -141,33 +151,35 @@ try:
                 m3.metric("未實現損益", f"${total_pnl:,.0f}", delta=f"{total_return:.2f}%")
                 
                 def color_pnl(val):
-                    color = 'red' if val > 0 else 'green' if val < 0 else 'black'
-                    return f'color: {color}'
+                    if isinstance(val, (int, float)):
+                        color = 'red' if val > 0 else 'green' if val < 0 else 'black'
+                        return f'color: {color}'
+                    return ''
 
                 display_cols = [
                     '股票代號', '股票名稱', '庫存股數', '平均成本', 
-                    '目前市價', '股票市值', '未實現損益', '報酬率 (%)'
+                    '目前市價', '股票市值', '未實現損益', '報酬率 (%)',
+                    '佔總資產比例 (%)', '配息金額'
                 ]
                 
-                # 檢查是否有缺漏股價 (若 price_map 沒有該股票，目前市價會是 0)
-                missing_prices = [sid for sid in stock_ids if sid not in price_map]
-                if missing_prices:
-                    st.warning(f"⚠️ 以下股票無法取得即時報價 (顯示為 0)：{', '.join(missing_prices)}")
+                # 針對不同欄位設定格式
+                format_dict = {
+                    "庫存股數": "{:,.0f}",
+                    "平均成本": "{:,.2f}",
+                    "目前市價": "{:,.2f}",
+                    "股票市值": "{:,.0f}",
+                    "未實現損益": "{:,.0f}",
+                    "報酬率 (%)": "{:,.2f}%",
+                    "佔總資產比例 (%)": "{:,.2f}%",
+                    "配息金額": "{:,.0f}"
+                }
 
                 st.dataframe(
                     df_final[display_cols].style
-                    .format({
-                        "庫存股數": "{:,.0f}",
-                        "平均成本": "{:,.2f}",
-                        "目前市價": "{:,.2f}",
-                        "股票市值": "{:,.0f}",
-                        "未實現損益": "{:,.0f}",
-                        "報酬率 (%)": "{:,.2f}%"
-                    })
+                    .format(format_dict)
                     .map(color_pnl, subset=['未實現損益', '報酬率 (%)']), 
                     use_container_width=True
                 )
-                
             else:
                 st.info("目前沒有庫存。")
         else:
