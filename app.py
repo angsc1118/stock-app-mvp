@@ -17,100 +17,128 @@ except Exception as e:
     st.toast(f"⚠️ 無法讀取 INDEX 表: {e}")
     stock_map = {}
 
-# --- 定義清空函式 (Callback) ---
-def clear_form():
+# --- 初始化 Session State ---
+# 這是為了儲存表單的狀態與訊息
+if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
+if "txn_account" not in st.session_state: st.session_state["txn_account"] = ""
+if "txn_stock_id" not in st.session_state: st.session_state["txn_stock_id"] = ""
+if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] = ""
+if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
+if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
+if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
+# 用來顯示操作結果的訊息 (因為 Rerun 後 st.success 的內容會消失，需存在 State 中)
+if "form_msg" not in st.session_state: st.session_state["form_msg"] = None 
+
+# --- 定義提交按鈕的 Callback (關鍵修正) ---
+def submit_callback():
     """
-    這個函式會在按鈕點擊後、畫面重新整理前執行。
-    在這裡修改 session_state 是安全的。
+    此函式會在按鈕點擊後、畫面重新渲染前執行。
+    在此處讀取並修改 session_state 是安全的，不會報錯。
     """
-    st.session_state["txn_stock_id"] = ""
-    st.session_state["txn_stock_name"] = ""
-    st.session_state["txn_qty"] = 0
-    st.session_state["txn_price"] = 0.0
-    st.session_state["txn_notes"] = ""
-    # 日期與帳戶保留，不清空
+    # 1. 從 Session State 讀取目前的值
+    # 注意：這裡不使用 input_xxx 變數，而是直接讀 state
+    s_date = st.session_state.txn_date
+    s_account = st.session_state.txn_account
+    s_id = st.session_state.txn_stock_id
+    s_name = st.session_state.txn_stock_name
+    s_action = st.session_state.txn_action
+    s_qty = st.session_state.txn_qty
+    s_price = st.session_state.txn_price
+    s_notes = st.session_state.txn_notes
+
+    # 2. 資料驗證
+    error_msgs = []
+    if not s_account: error_msgs.append("❌ 請輸入「交易帳戶」")
+    if not s_id: error_msgs.append("❌ 請輸入「股票代號」")
+    if not s_name: error_msgs.append("❌ 未輸入「股票名稱」")
+    
+    if s_action != '現金股利' and s_qty <= 0: 
+        error_msgs.append("❌ 「股數」必須大於 0")
+    if s_action in ['買進', '賣出'] and s_price <= 0: 
+        error_msgs.append("❌ 「單價」必須大於 0")
+
+    if error_msgs:
+        # 將錯誤存入 State，待會顯示
+        st.session_state["form_msg"] = {"type": "error", "content": error_msgs}
+    else:
+        try:
+            # 3. 寫入資料庫
+            database.save_transaction(
+                s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes
+            )
+            
+            # 4. 寫入成功：清空輸入欄位 (除了日期與帳戶)
+            st.session_state.txn_stock_id = ""
+            st.session_state.txn_stock_name = ""
+            st.session_state.txn_qty = 0
+            st.session_state.txn_price = 0.0
+            st.session_state.txn_notes = ""
+            
+            # 設定成功訊息
+            st.session_state["form_msg"] = {
+                "type": "success", 
+                "content": f"✅ 成功新增：{s_name} ({s_id}) {s_action}"
+            }
+            
+        except Exception as e:
+            st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
+
 
 # --- 1. 側邊欄：輸入區 ---
 with st.sidebar:
     st.header("📝 新增交易")
     
-    # --- 初始化 Session State ---
-    if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
-    if "txn_account" not in st.session_state: st.session_state["txn_account"] = ""
-    if "txn_stock_id" not in st.session_state: st.session_state["txn_stock_id"] = ""
-    if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] = ""
-    if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
-    if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
-    if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
-    
     col1, col2 = st.columns(2)
     
     # 1. 日期
-    input_date = col1.date_input("交易日期", key="txn_date")
+    col1.date_input("交易日期", key="txn_date")
     
     # 2. 帳戶
-    input_account = col2.text_input("交易帳戶", placeholder="請輸入帳戶名稱", key="txn_account")
+    col2.text_input("交易帳戶", placeholder="請輸入帳戶名稱", key="txn_account")
     
-    # 3. 股票代號
+    # 3. 股票代號 (支援自動查詢)
     input_stock_id = col1.text_input("股票代號", placeholder="例如 2330", key="txn_stock_id")
     
     # --- 自動查詢邏輯 ---
-    # 在 Widget 渲染後檢查值，如果有變動且查得到名稱，就更新名稱的 state
-    # 注意：這裡修改 txn_stock_name 是安全的，因為它還沒被下一個 text_input 讀取
+    # 當代號變更時，嘗試更新名稱
+    # 注意：這裡的 session_state 修改是安全的，因為 txn_stock_name 的 widget 還沒被建立
     if input_stock_id:
         clean_id = str(input_stock_id).strip()
         found_name = stock_map.get(clean_id, "")
+        # 只有當查到的名稱不同時才更新，避免無窮迴圈
         if found_name and st.session_state["txn_stock_name"] != found_name:
             st.session_state["txn_stock_name"] = found_name
-            st.rerun() # 強制重跑以顯示名稱
+            st.rerun()
 
     # 4. 股票名稱
-    input_stock_name = col2.text_input("股票名稱", placeholder="自動帶入或手動輸入", key="txn_stock_name")
+    col2.text_input("股票名稱", placeholder="自動帶入或手動輸入", key="txn_stock_name")
     
     # 5. 交易類別
-    input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利'], key="txn_action")
+    st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利'], key="txn_action")
     
     col3, col4 = st.columns(2)
     
     # 6. 股數與單價
-    input_qty = col3.number_input("股數", min_value=0, step=1000, key="txn_qty")
-    input_price = col4.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
+    col3.number_input("股數", min_value=0, step=1000, key="txn_qty")
+    col4.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
     
-    input_notes = st.text_area("備註", placeholder="選填", key="txn_notes")
+    st.text_area("備註", placeholder="選填", key="txn_notes")
     
-    # --- C. 送出按鈕邏輯修改 ---
-    # 我們不使用 on_click 綁定 save，因為我們需要先檢查錯誤。
-    # 策略：先檢查，如果通過檢查，寫入資料，然後呼叫 clear_form 並 rerun
-    
-    if st.button("💾 提交交易"):
-        # --- 資料驗證 ---
-        error_msgs = []
-        if not input_account: error_msgs.append("❌ 請輸入「交易帳戶」")
-        if not input_stock_id: error_msgs.append("❌ 請輸入「股票代號」")
-        if not input_stock_name: error_msgs.append("❌ 未輸入「股票名稱」")
-        
-        if input_action != '現金股利' and input_qty <= 0: 
-            error_msgs.append("❌ 「股數」必須大於 0")
-        if input_action in ['買進', '賣出'] and input_price <= 0: 
-            error_msgs.append("❌ 「單價」必須大於 0")
+    # --- C. 送出按鈕 (綁定 Callback) ---
+    # 這是解決 "cannot be modified after instantiated" 的關鍵
+    st.button("💾 提交交易", on_click=submit_callback)
 
-        if error_msgs:
-            for msg in error_msgs: st.error(msg)
-        else:
-            try:
-                database.save_transaction(
-                    input_date, input_stock_id, input_stock_name, 
-                    input_action, input_qty, input_price, 
-                    input_account, input_notes
-                )
-                st.success(f"✅ 成功新增：{input_stock_name} ({input_stock_id}) {input_action}")
-                
-                # --- 關鍵修改：手動呼叫清空函式 ---
-                clear_form()
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"寫入失敗: {e}")
+    # --- D. 顯示訊息 ---
+    # 檢查 State 中是否有來自 Callback 的訊息
+    if st.session_state["form_msg"]:
+        msg = st.session_state["form_msg"]
+        if msg["type"] == "success":
+            st.success(msg["content"])
+        elif msg["type"] == "error":
+            for err in msg["content"]:
+                st.error(err)
+        # 顯示完後可以選擇清空，或者保留直到下一次操作
+        # 這裡我們選擇不清空，讓使用者能看到結果，直到按下新的按鈕覆蓋它
 
 # --- 2. 主畫面：顯示區 (維持不變) ---
 tab1, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📋 原始交易紀錄"])
