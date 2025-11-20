@@ -2,7 +2,7 @@ import pandas as pd
 from collections import deque
 import uuid
 
-# --- 常數設定 (與 GAS 保持一致) ---
+# --- 常數設定 ---
 COMMISSION_RATE = 0.001425
 DISCOUNT = 0.6
 MIN_FEE = 1
@@ -46,10 +46,10 @@ def generate_txn_id():
 
 def calculate_fifo_report(df):
     """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame (含股票名稱)"""
-    # 欄位對應 (須與 Google Sheet 表頭一致)
+    # 欄位對應
     col_date = '交易日期'
     col_id = '股票代號'
-    col_name = '股票名稱'  # 讀取欄位
+    col_name = '股票名稱'
     col_action = '交易類別'
     col_qty = '股數'
     col_price = '單價'
@@ -57,19 +57,17 @@ def calculate_fifo_report(df):
     col_tax = '交易稅'
     col_other = '其他費用'
 
-    # 確保資料格式正確
     df[col_date] = pd.to_datetime(df[col_date])
     df = df.sort_values(by=col_date).reset_index(drop=True)
     
     portfolio = {} 
-    names_map = {}  # 用來記錄每個代號對應的最新名稱
+    names_map = {}
 
     for _, row in df.iterrows():
         sid = str(row.get(col_id, '')).strip()
         action = row.get(col_action, '')
-        
-        # 記錄股票名稱 (如果這一行有名稱，就記錄下來供後續報表使用)
         stock_name = str(row.get(col_name, '')).strip()
+        
         if sid and stock_name:
             names_map[sid] = stock_name
         
@@ -86,29 +84,22 @@ def calculate_fifo_report(df):
         
         if sid not in portfolio: portfolio[sid] = deque()
 
-        # FIFO 核心邏輯
         if action in ['買進', '現金增資']:
             unit_cost = total_buy_cost / qty if qty > 0 else 0
             portfolio[sid].append({'qty': qty, 'unit_cost': unit_cost})
-            
         elif action == '股票股利':
-            # 股票股利視為零成本(或僅含微量費用)進貨
             portfolio[sid].append({'qty': qty, 'unit_cost': (fee+other)/qty if qty>0 else 0})
-
         elif action == '賣出':
             sell_qty = qty
             while sell_qty > 0 and portfolio[sid]:
-                batch = portfolio[sid].popleft() # 取出最早的一批
+                batch = portfolio[sid].popleft()
                 if batch['qty'] > sell_qty:
-                    # 該批庫存夠賣，扣除後把剩餘的塞回頭部
                     batch['qty'] -= sell_qty
                     portfolio[sid].appendleft(batch)
                     sell_qty = 0
                 else:
-                    # 該批庫存不夠賣，整批消滅
                     sell_qty -= batch['qty']
     
-    # 整理報表
     report_data = []
     for sid, batches in portfolio.items():
         total_shares = sum(b['qty'] for b in batches)
@@ -116,7 +107,7 @@ def calculate_fifo_report(df):
             total_cost = sum(b['qty'] * b['unit_cost'] for b in batches)
             report_data.append({
                 '股票代號': sid,
-                '股票名稱': names_map.get(sid, '未命名'), # 填入名稱
+                '股票名稱': names_map.get(sid, '未命名'),
                 '庫存股數': int(total_shares),
                 '總持有成本 (FIFO)': int(total_cost),
                 '平均成本': round(total_cost / total_shares, 2)
@@ -124,32 +115,37 @@ def calculate_fifo_report(df):
     
     return pd.DataFrame(report_data)
 
-# --- 新增：計算未實現損益 (結合市價) ---
+# --- 修改：計算未實現損益 (新增比例欄位) ---
 def calculate_unrealized_pnl(df_fifo, current_price_map):
     """
-    接收 FIFO 庫存表與即時股價，計算未實現損益
-    df_fifo: calculate_fifo_report 的產出
-    current_price_map: { '2330': 1050.0, '0050': 150.0 }
+    接收 FIFO 庫存表與即時股價，計算未實現損益、總資產比例
     """
     if df_fifo.empty:
         return df_fifo
 
-    # 建立新欄位 (預設為 0 或 NaN)
+    # 1. 填入市價 (若無報價則補 0)
     df_fifo['目前市價'] = df_fifo['股票代號'].map(current_price_map).fillna(0)
     
-    # 計算市值與損益
-    # 股票市值 = 庫存股數 * 目前市價
-    df_fifo['股票市值'] = df_fifo.apply(
-        lambda row: row['庫存股數'] * row['目前市價'], axis=1
-    )
+    # 2. 計算市值
+    df_fifo['股票市值'] = df_fifo.apply(lambda row: row['庫存股數'] * row['目前市價'], axis=1)
     
-    # 未實現損益 = 股票市值 - 總持有成本
+    # 3. 計算未實現損益
     df_fifo['未實現損益'] = df_fifo['股票市值'] - df_fifo['總持有成本 (FIFO)']
     
-    # 報酬率 (%) = 未實現損益 / 總持有成本 * 100
+    # 4. 計算報酬率 (%)
     df_fifo['報酬率 (%)'] = df_fifo.apply(
         lambda row: 0 if row['總持有成本 (FIFO)'] == 0 else (row['未實現損益'] / row['總持有成本 (FIFO)']) * 100,
         axis=1
     )
+    
+    # 5. 新增：計算佔總資產比例 (%)
+    total_market_value = df_fifo['股票市值'].sum()
+    df_fifo['佔總資產比例 (%)'] = df_fifo.apply(
+        lambda row: 0 if total_market_value == 0 else (row['股票市值'] / total_market_value) * 100,
+        axis=1
+    )
+    
+    # 6. 新增：配息金額 (保留欄位，預設為 0)
+    df_fifo['配息金額'] = 0
     
     return df_fifo
