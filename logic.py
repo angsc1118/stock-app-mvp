@@ -6,13 +6,11 @@ import uuid
 COMMISSION_RATE = 0.001425
 MIN_FEE = 1
 TAX_RATE = 0.003       # 一般股票交易稅
-ETF_TAX_RATE = 0.001   # ETF 交易稅 (新增)
+ETF_TAX_RATE = 0.001   # ETF 交易稅 (0.1%)
 
 def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     """
     計算單筆交易的費用與淨收付
-    discount: 手續費折數
-    stock_id: 股票代號 (用來判斷是否為 ETF)
     """
     gross_amount = int(qty * price)
     
@@ -24,7 +22,6 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     tax = 0
     if action == '賣出':
         # 判斷是否為 ETF (代號以 00 開頭)
-        # 轉為字串並去空白，避免型別錯誤
         clean_id = str(stock_id).strip()
         current_tax_rate = ETF_TAX_RATE if clean_id.startswith("00") else TAX_RATE
         tax = int(gross_amount * current_tax_rate)
@@ -56,7 +53,6 @@ def generate_txn_id():
 
 def calculate_fifo_report(df):
     """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame (含股票名稱)"""
-    # 欄位對應
     col_date = '交易日期'
     col_id = '股票代號'
     col_name = '股票名稱'
@@ -128,6 +124,9 @@ def calculate_fifo_report(df):
 def calculate_unrealized_pnl(df_fifo, current_price_map):
     """
     接收 FIFO 庫存表與即時股價，計算未實現損益
+    1. 計算賣出費用 (稅+手續費)
+    2. 損益 = 市值 - 成本 - 賣出費用
+    3. 依資產比例排序
     """
     if df_fifo.empty:
         return df_fifo
@@ -141,34 +140,22 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
     # 3. 計算市值
     df_fifo['股票市值'] = df_fifo.apply(lambda row: row['庫存股數'] * row['目前市價'], axis=1)
     
-    # 4. 計算未實現損益
-    df_fifo['未實現損益'] = df_fifo['股票市值'] - df_fifo['總持有成本 (FIFO)']
-    
-    # 5. 計算報酬率 (%)
-    df_fifo['報酬率 (%)'] = df_fifo.apply(
-        lambda row: 0 if row['總持有成本 (FIFO)'] == 0 else (row['未實現損益'] / row['總持有成本 (FIFO)']) * 100,
-        axis=1
-    )
-    
-    # 6. 計算佔總資產比例 (%)
+    # 4. 計算佔總資產比例 (%)
     total_market_value = df_fifo['股票市值'].sum()
     df_fifo['佔總資產比例 (%)'] = df_fifo.apply(
         lambda row: 0 if total_market_value == 0 else (row['股票市值'] / total_market_value) * 100,
         axis=1
     )
     
-    # 7. 配息金額
-    df_fifo['配息金額'] = 0
-
-    # 8. 賣出額外費用 (估算)
-    def calc_est_sell_fees(row):
+    # 5. 計算預估賣出費用 (內部函式：回傳數值以便計算)
+    def get_sell_costs(row):
         market_value = int(row['股票市值'])
         stock_id = str(row['股票代號']).strip()
         
         if market_value == 0:
-            return "0 (0+0)"
+            return 0, 0, 0 # total, comm, tax
         
-        # 判斷 ETF 稅率
+        # 判斷 ETF 稅率 (00開頭 0.1%, 其他 0.3%)
         current_tax_rate = ETF_TAX_RATE if stock_id.startswith("00") else TAX_RATE
         tax = int(market_value * current_tax_rate)
         
@@ -177,8 +164,32 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
         comm = max(raw_comm, MIN_FEE)
         
         total = tax + comm
-        return f"{total} ({comm}+{tax})"
+        return total, comm, tax
 
-    df_fifo['賣出額外費用'] = df_fifo.apply(calc_est_sell_fees, axis=1)
+    # 計算每一行的賣出成本
+    # 使用 apply expand=True 一次取得三個值
+    costs_df = df_fifo.apply(get_sell_costs, axis=1, result_type='expand')
+    costs_df.columns = ['total_fee', 'comm', 'tax']
+    
+    # 6. 計算未實現損益 (修正公式：市值 - 成本 - 賣出費用)
+    df_fifo['未實現損益'] = df_fifo['股票市值'] - df_fifo['總持有成本 (FIFO)'] - costs_df['total_fee']
+
+    # 7. 計算報酬率 (%)
+    df_fifo['報酬率 (%)'] = df_fifo.apply(
+        lambda row: 0 if row['總持有成本 (FIFO)'] == 0 else (row['未實現損益'] / row['總持有成本 (FIFO)']) * 100,
+        axis=1
+    )
+    
+    # 8. 產生顯示用的「賣出額外費用」字串
+    df_fifo['賣出額外費用'] = costs_df.apply(
+        lambda x: f"{int(x['total_fee'])} ({int(x['comm'])}+{int(x['tax'])})", 
+        axis=1
+    )
+    
+    # 9. 配息金額 (保留欄位)
+    df_fifo['配息金額'] = 0
+
+    # 10. 排序：依照「佔總資產比例 (%)」降冪排序 (大 -> 小)
+    df_fifo = df_fifo.sort_values(by='佔總資產比例 (%)', ascending=False).reset_index(drop=True)
     
     return df_fifo
