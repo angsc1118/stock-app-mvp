@@ -23,7 +23,7 @@ def load_data():
     # 2. 開啟試算表 (請修改這裡的 URL 為您的試算表連結)
     # 注意：這是一個變數，請確認您的 secrets.toml 或直接在這裡貼上 URL 測試
     # 為了方便，我們先寫死 URL，請替換下面這行：
-    sheet_url = "https://docs.google.com/spreadsheets/d/您的試算表ID/edit" 
+    sheet_url = "https://docs.google.com/spreadsheets/d/1H0qIDR1cQdLaPkr2cQLiISP-wUgwy2y45AxhetnZ0zo/edit" 
 
     sheet = client.open_by_url(sheet_url)
     worksheet = sheet.worksheet('交易紀錄')
