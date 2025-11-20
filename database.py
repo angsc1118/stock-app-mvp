@@ -53,31 +53,22 @@ def get_stock_info_map():
         print(f"Warning: 讀取 INDEX 表失敗: {e}")
         return {}
 
-# --- 修改：讀取帳戶與折數 ---
+# --- 讀取帳戶與折數 ---
 @st.cache_data(ttl=3600)
 def get_account_settings():
-    """
-    讀取 '交割帳戶設定' 表，回傳 { '帳戶名稱': 折數 } 的字典
-    例如: { '元大-敦化': 0.6, '富邦': 0.168 }
-    """
     try:
         ws = get_worksheet(ACCOUNT_SHEET_NAME)
-        # 使用 get_all_records 讀取，自動將第一列作為 Key
         data = ws.get_all_records()
         
         account_map = {}
         for row in data:
-            # 嘗試讀取欄位，相容不同的命名習慣
             name = str(row.get('帳戶名稱', row.get('Account', ''))).strip()
-            
-            # 讀取折數，若無則預設為 0.6 (或 1.0，視您需求)
             discount_val = row.get('手續費折數', row.get('Discount', 0.6))
             
-            # 確保折數是數字
             try:
                 discount = float(discount_val)
             except:
-                discount = 0.6 # 轉換失敗的預設值
+                discount = 0.6 
 
             if name:
                 account_map[name] = discount
@@ -90,18 +81,18 @@ def get_account_settings():
         print(f"Warning: 讀取帳戶表失敗: {e}")
         return {"無法讀取帳戶": 1.0}
 
-# --- 既有功能：讀取交易紀錄 ---
+# --- 讀取交易紀錄 ---
 def load_data():
     ws = get_worksheet(SHEET_NAME)
     data = ws.get_all_records()
     return pd.DataFrame(data)
 
-# --- 修改：儲存交易 (增加 discount 參數) ---
+# --- 修改：儲存交易 (增加 stock_id 傳遞) ---
 def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
     
-    # 1. 將折數傳給邏輯層計算
-    fees = logic.calculate_fees(qty, price, action, discount)
+    # 修改：將 stock_id 傳入，讓邏輯層判斷 ETF 稅率
+    fees = logic.calculate_fees(qty, price, action, discount, stock_id)
     
     txn_id = logic.generate_txn_id()
     
