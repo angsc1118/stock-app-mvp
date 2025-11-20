@@ -9,21 +9,16 @@ TAX_RATE = 0.003       # 一般股票交易稅
 ETF_TAX_RATE = 0.001   # ETF 交易稅
 
 def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
-    """
-    計算單筆交易的費用與淨收付
-    """
+    """計算單筆交易的費用與淨收付"""
     gross_amount = int(qty * price)
     
-    # 預設費用為 0
     commission = 0
     tax = 0
     
-    # 只有買賣才算手續費
     if action in ['買進', '賣出']:
         raw_commission = int(gross_amount * COMMISSION_RATE * discount)
         commission = max(raw_commission, MIN_FEE) if gross_amount > 0 else 0
 
-    # 只有賣出才算交易稅
     if action == '賣出':
         clean_id = str(stock_id).strip()
         current_tax_rate = ETF_TAX_RATE if clean_id.startswith("00") else TAX_RATE
@@ -32,9 +27,7 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     other_fees = 0
     total_fees = commission + tax + other_fees
     
-    # 淨收付計算
     net_cash_flow = 0
-    
     if action in ['買進', '現金增資']:
         net_cash_flow = -(gross_amount + total_fees)
     elif action == '賣出':
@@ -56,7 +49,6 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     }
 
 def generate_txn_id():
-    """產生唯一交易 ID"""
     return f"TXN-{str(uuid.uuid4())[:8].upper()}"
 
 def _safe_float(value):
@@ -64,8 +56,7 @@ def _safe_float(value):
     try:
         if isinstance(value, (int, float)):
             return float(value)
-        # 處理字串中的逗號
-        clean_val = str(value).replace(',', '').strip()
+        clean_val = str(value).replace(',', '').replace('$', '').strip()
         if not clean_val:
             return 0.0
         return float(clean_val)
@@ -74,6 +65,9 @@ def _safe_float(value):
 
 def calculate_fifo_report(df):
     """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame"""
+    # 先清除欄位名稱前後的空白，避免讀取錯誤
+    df.columns = df.columns.str.strip()
+    
     col_date = '交易日期'
     col_id = '股票代號'
     col_name = '股票名稱'
@@ -84,7 +78,6 @@ def calculate_fifo_report(df):
     col_tax = '交易稅'
     col_other = '其他費用'
 
-    # 確保日期格式正確
     df[col_date] = pd.to_datetime(df[col_date])
     df = df.sort_values(by=col_date).reset_index(drop=True)
     
@@ -96,14 +89,12 @@ def calculate_fifo_report(df):
         action = row.get(col_action, '')
         stock_name = str(row.get(col_name, '')).strip()
         
-        # 忽略非股票交易 (入金/出金)
         if action in ['入金', '出金']:
             continue
 
         if sid and stock_name:
             names_map[sid] = stock_name
         
-        # 使用 _safe_float 處理數值，避免 "1,000" 導致錯誤
         qty = _safe_float(row.get(col_qty))
         price = _safe_float(row.get(col_price))
         fee = _safe_float(row.get(col_fee))
@@ -146,9 +137,7 @@ def calculate_fifo_report(df):
     return pd.DataFrame(report_data)
 
 def calculate_unrealized_pnl(df_fifo, current_price_map):
-    """
-    接收 FIFO 庫存表與即時股價，計算未實現損益
-    """
+    """計算未實現損益"""
     if df_fifo.empty:
         return df_fifo
 
@@ -166,17 +155,14 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
         market_value = int(row['股票市值'])
         stock_id = str(row['股票代號']).strip()
         
-        if market_value == 0:
-            return 0, 0, 0 
+        if market_value == 0: return 0, 0, 0 
         
         current_tax_rate = ETF_TAX_RATE if stock_id.startswith("00") else TAX_RATE
         tax = int(market_value * current_tax_rate)
-        
         raw_comm = int(market_value * COMMISSION_RATE)
         comm = max(raw_comm, MIN_FEE)
         
-        total = tax + comm
-        return total, comm, tax
+        return tax + comm, comm, tax
 
     costs_df = df_fifo.apply(get_sell_costs, axis=1, result_type='expand')
     costs_df.columns = ['total_fee', 'comm', 'tax']
@@ -189,8 +175,7 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
     )
     
     df_fifo['賣出額外費用'] = costs_df.apply(
-        lambda x: f"{int(x['total_fee'])} ({int(x['comm'])}+{int(x['tax'])})", 
-        axis=1
+        lambda x: f"{int(x['total_fee'])} ({int(x['comm'])}+{int(x['tax'])})", axis=1
     )
     
     df_fifo['配息金額'] = 0
@@ -201,22 +186,35 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
 
 def calculate_account_balances(df):
     """
-    統計各帳戶的現金餘額
-    修正：加入逗號移除邏輯，確保字串能正確轉為數字
+    統計各帳戶的現金餘額 (強化版)
+    1. 自動清除欄位名稱空白
+    2. 強制清除金額欄位中的 ',' 與 '$' 符號
+    3. 排除沒有帳戶名稱的異常資料
     """
     if df.empty:
         return {}
+
+    # 1. 清除欄位名稱前後空白 (避免 "交易帳戶 " 這種錯誤)
+    df.columns = df.columns.str.strip()
 
     col_account = '交易帳戶'
     col_net_cash = '淨收付金額'
 
     if col_account not in df.columns or col_net_cash not in df.columns:
+        # 若找不到欄位，回傳空字典，避免報錯
+        print("警告：找不到 '交易帳戶' 或 '淨收付金額' 欄位")
         return {}
 
-    # 重要修正：先轉字串 -> 移除逗號 -> 再轉數值
-    df[col_net_cash] = df[col_net_cash].astype(str).str.replace(',', '', regex=False)
-    df[col_net_cash] = pd.to_numeric(df[col_net_cash], errors='coerce').fillna(0)
+    # 建立副本以免影響原始資料
+    df_calc = df.copy()
+
+    # 2. 清洗數據：轉字串 -> 移除 $ 與 , -> 轉數字 (失敗變0)
+    df_calc[col_net_cash] = df_calc[col_net_cash].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+    df_calc[col_net_cash] = pd.to_numeric(df_calc[col_net_cash], errors='coerce').fillna(0)
     
-    balances = df.groupby(col_account)[col_net_cash].sum().to_dict()
+    # 3. 排除帳戶名稱為空的資料 (避免加總到幽靈帳戶)
+    df_calc = df_calc[df_calc[col_account].astype(str).str.strip() != '']
+
+    balances = df_calc.groupby(col_account)[col_net_cash].sum().to_dict()
     
     return balances
