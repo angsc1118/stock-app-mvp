@@ -1,14 +1,3 @@
-import streamlit as st
-import pandas as pd
-import plotly.express as px # 引入繪圖套件
-from datetime import date, datetime
-
-import database
-import logic
-import market_data
-
-st.set_page_config(page_title="股票資產管理", layout="wide")
-st.title('📊 股票資產管理系統 (Streamlit Cloud)')
 
 # --- 預先讀取 ---
 try:import streamlit as st
