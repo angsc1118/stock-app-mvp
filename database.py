@@ -8,6 +8,7 @@ import logic  # 匯入邏輯層
 SHEET_NAME = '交易紀錄'
 INDEX_SHEET_NAME = 'INDEX'
 ACCOUNT_SHEET_NAME = '交割帳戶設定'
+HISTORY_SHEET_NAME = '資產歷史紀錄' # 新增
 
 # --- 連線核心 ---
 @st.cache_resource
@@ -32,8 +33,8 @@ def get_worksheet(sheet_name):
         sheet = client.open_by_url(sheet_url)
         return sheet.worksheet(sheet_name)
     except Exception as e:
-        st.error(f"❌ 無法開啟工作表 '{sheet_name}'，請確認名稱正確: {e}")
-        st.stop()
+        # 這裡不使用 st.error 阻擋，而是拋出例外讓呼叫端處理 (例如提示建立工作表)
+        raise Exception(f"無法開啟工作表 '{sheet_name}'，請確認已建立該分頁。錯誤: {e}")
 
 # --- 讀取股票代碼表 ---
 @st.cache_data(ttl=3600)
@@ -83,17 +84,19 @@ def get_account_settings():
 
 # --- 讀取交易紀錄 ---
 def load_data():
-    ws = get_worksheet(SHEET_NAME)
-    data = ws.get_all_records()
-    return pd.DataFrame(data)
+    try:
+        ws = get_worksheet(SHEET_NAME)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"讀取交易紀錄失敗: {e}")
+        return pd.DataFrame()
 
-# --- 修改：儲存交易 (增加 stock_id 傳遞) ---
+# --- 儲存交易 ---
 def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
     
-    # 修改：將 stock_id 傳入，讓邏輯層判斷 ETF 稅率
     fees = logic.calculate_fees(qty, price, action, discount, stock_id)
-    
     txn_id = logic.generate_txn_id()
     
     row_data = [
@@ -105,3 +108,31 @@ def save_transaction(date_val, stock_id, stock_name, action, qty, price, account
     
     ws.append_row(row_data)
     st.cache_data.clear()
+
+# --- [新增] 讀取資產歷史紀錄 ---
+def load_asset_history():
+    """讀取資產歷史資料"""
+    try:
+        ws = get_worksheet(HISTORY_SHEET_NAME)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        # 若讀取失敗(例如尚未建立該Sheet)，回傳空DataFrame
+        return pd.DataFrame()
+
+# --- [新增] 寫入資產歷史紀錄 ---
+def save_asset_history(date_str, total_assets, total_cash, total_stock):
+    """
+    寫入一筆資產紀錄
+    """
+    ws = get_worksheet(HISTORY_SHEET_NAME)
+    
+    row_data = [
+        str(date_str),
+        total_assets,
+        total_cash,
+        total_stock
+    ]
+    
+    ws.append_row(row_data)
+    # 不需要清除全部 cache，因為歷史紀錄通常是在獨立的 Tab 讀取
