@@ -238,7 +238,7 @@ try:
             st.warning("目前沒有交易紀錄。")
 
     # ------------------------------------------------
-    # Tab 3: 已實現損益 (修改個股貢獻度邏輯)
+    # Tab 3: 已實現損益
     # ------------------------------------------------
     with tab3:
         st.subheader("已實現損益分析 (Realized P&L)")
@@ -263,43 +263,54 @@ try:
                 
                 chart_col1, chart_col2 = st.columns(2)
                 
+                # 1. 月度損益圖 (修改顏色與 Hover 格式)
                 with chart_col1:
                     st.markdown("##### 📅 月度損益趨勢")
                     monthly_pnl = df_realized.groupby('月')['已實現損益'].sum().reset_index()
                     monthly_pnl['Color'] = monthly_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
+                    
                     fig_month = px.bar(
                         monthly_pnl, x='月', y='已實現損益', color='Color',
-                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'},
+                        # 修改：使用較暗的紅色 (#E53935) 取代原本的 #ef5350
+                        color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
                         text_auto='.2s'
                     )
-                    fig_month.update_layout(showlegend=False, xaxis_title=None)
+                    # 修改：更新 Hover 顯示完整數字 (逗號分隔)，座標軸保留 K/M
+                    fig_month.update_traces(hovertemplate='<b>%{x}</b><br>已實現損益: %{y:,.0f}<extra></extra>')
+                    fig_month.update_layout(
+                        showlegend=False, 
+                        xaxis_title=None, 
+                        yaxis=dict(tickformat=".2s") # 座標軸保留 .2s (300k)
+                    )
                     st.plotly_chart(fig_month, use_container_width=True)
 
-                # ------------------------------------------------
-                # 個股貢獻度 (修改為 Top 8 賺/賠)
-                # ------------------------------------------------
+                # 2. 個股貢獻度 (修改顏色與 Hover 格式)
                 with chart_col2:
                     st.markdown("##### 🏆 個股貢獻度排行榜 (Top 8 賺/賠)")
                     stock_pnl = df_realized.groupby('股票')['已實現損益'].sum().reset_index()
                     
-                    # 篩選邏輯：若超過 16 檔，只取賺最多前8與賠最多前8
                     if len(stock_pnl) > 16:
                         stock_pnl_sorted = stock_pnl.sort_values(by='已實現損益', ascending=False)
                         top_8 = stock_pnl_sorted.head(8)
                         bottom_8 = stock_pnl_sorted.tail(8)
-                        # 合併並去重 (防止資料少於16筆時重複)
                         stock_pnl = pd.concat([top_8, bottom_8]).drop_duplicates()
                     
-                    # 最終排序，讓圖表由虧(下)到賺(上)排列
                     stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True)
-                    
                     stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
+                    
                     fig_stock = px.bar(
                         stock_pnl, y='股票', x='已實現損益', color='Color', orientation='h',
-                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'},
+                        # 修改：使用較暗的紅色 (#E53935)
+                        color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
                         text_auto='.2s'
                     )
-                    fig_stock.update_layout(showlegend=False, yaxis_title=None)
+                    # 修改：更新 Hover 顯示完整數字
+                    fig_stock.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
+                    fig_stock.update_layout(
+                        showlegend=False, 
+                        yaxis_title=None,
+                        xaxis=dict(tickformat=".2s") # 座標軸保留 .2s
+                    )
                     st.plotly_chart(fig_stock, use_container_width=True)
 
                 st.markdown("##### 🗓️ 年度損益統計")
