@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px # 引入繪圖套件
-from datetime import date, datetime
+import plotly.express as px
+from datetime import date, datetime, timedelta # 新增 timedelta 處理時區
 
 import database
 import logic
@@ -172,11 +172,13 @@ try:
                     stock_ids = temp_fifo['股票代號'].unique().tolist()
                     prices = market_data.get_realtime_prices(stock_ids)
                     st.session_state["realtime_prices"] = prices
-                    st.session_state["price_update_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # 修改 1: 強制加上 8 小時 (UTC+8 台灣時間)
+                    tw_time = datetime.utcnow() + timedelta(hours=8)
+                    st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
                     st.rerun()
         
         if st.session_state["price_update_time"]:
-            col_time.write(f"🕒 最後更新: **{st.session_state['price_update_time']}**")
+            col_time.write(f"🕒 最後更新: **{st.session_state['price_update_time']}** (台灣時間)")
         else:
             col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
@@ -208,7 +210,9 @@ try:
             with col_record_btn:
                 if st.button("📝 記錄今日資產"):
                     try:
-                        database.save_asset_history(date.today(), int(total_assets), int(total_cash), int(total_market_value))
+                        # 記錄時也使用台灣時間的日期
+                        today_tw = (datetime.utcnow() + timedelta(hours=8)).date()
+                        database.save_asset_history(today_tw, int(total_assets), int(total_cash), int(total_market_value))
                         st.success("已記錄！")
                     except Exception as e:
                         st.error(f"記錄失敗: {e}")
@@ -275,6 +279,9 @@ try:
             df_realized = logic.calculate_realized_report(df_raw)
             
             if not df_realized.empty:
+                # 修改 2: 對 df_realized 的交易日期進行格式化
+                df_realized['交易日期'] = pd.to_datetime(df_realized['交易日期']).dt.date
+
                 all_years = sorted(df_realized['年'].unique().tolist(), reverse=True)
                 year_options = ["全部"] + all_years
                 col_filter, _ = st.columns([1, 3])
@@ -382,7 +389,10 @@ try:
             st.plotly_chart(fig_stack, use_container_width=True)
             
             with st.expander("查看歷史紀錄數據"):
-                st.dataframe(df_history.sort_values('日期', ascending=False), use_container_width=True)
+                # 修改 2: 對歷史紀錄的日期進行格式化
+                df_history_display = df_history.copy()
+                df_history_display['日期'] = df_history_display['日期'].dt.date
+                st.dataframe(df_history_display.sort_values('日期', ascending=False), use_container_width=True)
         else:
             st.info("尚無歷史紀錄。請至「資產庫存」頁面點擊「📝 記錄今日資產」按鈕來開始累積數據。")
 
@@ -393,7 +403,8 @@ try:
         st.subheader("最近交易紀錄")
         if not df_raw.empty and '交易日期' in df_raw.columns:
             df_display = df_raw.copy()
-            df_display['交易日期'] = pd.to_datetime(df_display['交易日期'])
+            # 修改 2: 將原始紀錄的日期格式化為 YYYY-MM-DD
+            df_display['交易日期'] = pd.to_datetime(df_display['交易日期']).dt.date
             df_display = df_display.sort_values(by='交易日期', ascending=False)
             st.dataframe(df_display)
         else:
