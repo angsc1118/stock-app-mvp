@@ -320,6 +320,8 @@ else:
                     # 這裡不指定固定顏色映射，讓 Plotly 自動分配，但可以透過 Type 做區分優化
                 )
                 fig_alloc.update_traces(textinfo='percent+label')
+                # 修改：設定 Hover 標籤字體大小為 20
+                fig_alloc.update_layout(hoverlabel=dict(font_size=20))
                 st.plotly_chart(fig_alloc, use_container_width=True)
             else:
                 st.info("資產為 0")
@@ -329,7 +331,8 @@ else:
         if not df_unrealized.empty and total_market_value > 0:
             fig_stock_pie = px.pie(df_unrealized, values='股票市值', names='股票', hole=0.4)
             fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_stock_pie.update_layout(showlegend=True) # 顯示圖例
+            # 修改：設定 Hover 標籤字體大小為 20，並顯示圖例
+            fig_stock_pie.update_layout(showlegend=True, hoverlabel=dict(font_size=20)) 
             st.plotly_chart(fig_stock_pie, use_container_width=True)
         else:
             if total_market_value == 0:
@@ -347,9 +350,43 @@ else:
     # --- Tab 1: 持股庫存 (純表格) ---
     with tab1:
         if not df_unrealized.empty:
+            # [新增] 虧損警示區塊
+            loss_threshold = -20.0
+            danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold]
+            
+            if not danger_stocks.empty:
+                st.error(f"⚠️ 警示：共有 {len(danger_stocks)} 檔股票虧損超過 {abs(loss_threshold)}%！")
+                for i, row in danger_stocks.iterrows():
+                    st.markdown(f"- **{row['股票']}**: 報酬率 **{row['報酬率 (%)']:.2f}%** (未實現損益 ${row['未實現損益']:,.0f})")
+            
+            # 表格樣式
+            def style_dataframe(val):
+                # 字體顏色：紅漲綠跌
+                color = 'red' if val > 0 else 'green' if val < 0 else 'black'
+                
+                # 背景顏色：若虧損超過 20%，背景亮紅 (Light Red background)
+                bg_color = ''
+                if val < -20:
+                    bg_color = 'background-color: #FFCDD2;' # 淺紅色背景
+                elif val < 0:
+                    pass # 一般虧損不變背景，只變字色
+                
+                return f'color: {color}; {bg_color}'
+
+            # 為了使用 map，我們需要分開處理。
+            # 方案：使用 map(func, subset) 針對數值欄位做紅綠字
+            # 再針對「報酬率 (%)」欄位做特殊背景處理
+            
             def color_pnl(val):
                 if isinstance(val, (int, float)):
                     return f'color: {"red" if val > 0 else "green" if val < 0 else "black"}'
+                return ''
+            
+            def highlight_danger(val):
+                if isinstance(val, (int, float)):
+                    color = "red" if val > 0 else "green" if val < 0 else "black"
+                    bg = "background-color: #FFCDD2" if val < -20 else ""
+                    return f'color: {color}; {bg}'
                 return ''
 
             display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)', '賣出額外費用', '配息金額']
@@ -358,8 +395,13 @@ else:
                 "股票市值": "{:,.0f}", "未實現損益": "{:,.0f}", "報酬率 (%)": "{:,.2f}%",
                 "佔總資產比例 (%)": "{:,.2f}%", "配息金額": "{:,.0f}"
             }
+            
+            # 應用樣式：先套用一般紅綠字，再針對報酬率套用警示背景
             st.dataframe(
-                df_unrealized[display_cols].style.format(format_dict).map(color_pnl, subset=['未實現損益', '報酬率 (%)']), 
+                df_unrealized[display_cols].style
+                .format(format_dict)
+                .map(color_pnl, subset=['未實現損益']) # 損益欄位只變字色
+                .map(highlight_danger, subset=['報酬率 (%)']), # 報酬率欄位變字色+背景
                 use_container_width=True, height=500
             )
         else:
@@ -368,7 +410,6 @@ else:
     # --- Tab 2: 獲利分析 (已實現) ---
     with tab2:
         if not df_realized_all.empty:
-            # 年度篩選
             all_years = sorted(df_realized_all['年'].unique().tolist(), reverse=True)
             year_options = ["全部"] + all_years
             col_filter, _ = st.columns([1, 4])
@@ -380,7 +421,6 @@ else:
                 df_view = df_realized_all[df_realized_all['年'] == selected_year]
             
             if not df_view.empty:
-                # 指標
                 pnl_sum = df_view['已實現損益'].sum()
                 div_sum = df_view[df_view['交易類別'] == '股息']['已實現損益'].sum()
                 trades = df_view[df_view['交易類別'] == '賣出']
@@ -394,7 +434,6 @@ else:
                 
                 st.divider()
                 
-                # 圖表
                 g1, g2 = st.columns(2)
                 with g1:
                     st.markdown("##### 月度損益")
@@ -405,7 +444,8 @@ else:
                     m_pnl['Color'] = m_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     fig_m = px.bar(m_pnl, x='月', y='已實現損益', color='Color', 
                                    color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
-                    fig_m.update_layout(showlegend=False, xaxis_title=None)
+                    fig_m.update_traces(hovertemplate='<b>%{x}</b><br>已實現損益: %{y:,.0f}<extra></extra>')
+                    fig_m.update_layout(showlegend=False, xaxis_title=None, yaxis=dict(tickformat=".2s"))
                     st.plotly_chart(fig_m, use_container_width=True)
                 
                 with g2:
@@ -426,7 +466,8 @@ else:
                     s_pnl['Color'] = s_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     fig_s = px.bar(s_pnl, y='股票', x='已實現損益', orientation='h', color='Color',
                                    color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
-                    fig_s.update_layout(showlegend=False, yaxis_title=None, height=h)
+                    fig_s.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
+                    fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"), height=h)
                     st.plotly_chart(fig_s, use_container_width=True)
             else:
                 st.info("無資料")
