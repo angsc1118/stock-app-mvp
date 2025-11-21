@@ -154,7 +154,6 @@ with st.sidebar:
 # ============================
 # Main Content
 # ============================
-# 新增第3個分頁：已實現損益
 tab1, tab3, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📉 已實現損益分析", "📋 原始交易紀錄"])
 
 try:
@@ -239,24 +238,19 @@ try:
             st.warning("目前沒有交易紀錄。")
 
     # ------------------------------------------------
-    # Tab 3: 已實現損益 (新增功能)
+    # Tab 3: 已實現損益 (修改個股貢獻度邏輯)
     # ------------------------------------------------
     with tab3:
         st.subheader("已實現損益分析 (Realized P&L)")
         
         if not df_raw.empty:
-            # 計算已實現損益
             df_realized = logic.calculate_realized_report(df_raw)
             
             if not df_realized.empty:
-                # --- A. 關鍵指標 ---
                 total_realized_pnl = df_realized['已實現損益'].sum()
-                
-                # 篩選出只有「賣出」的交易來算勝率 (排除股利)
                 sell_trades = df_realized[df_realized['交易類別'] == '賣出']
                 win_trades = sell_trades[sell_trades['已實現損益'] > 0]
                 win_rate = (len(win_trades) / len(sell_trades) * 100) if not sell_trades.empty else 0
-                
                 total_div = df_realized[df_realized['交易類別'] == '股息']['已實現損益'].sum()
                 
                 kp1, kp2, kp3, kp4 = st.columns(4)
@@ -267,27 +261,37 @@ try:
                 
                 st.divider()
                 
-                # --- B. 圖表分析 (左右兩欄) ---
                 chart_col1, chart_col2 = st.columns(2)
                 
                 with chart_col1:
                     st.markdown("##### 📅 月度損益趨勢")
-                    # 依照月份分組加總
                     monthly_pnl = df_realized.groupby('月')['已實現損益'].sum().reset_index()
-                    # 繪製長條圖 (使用 Plotly，紅漲綠跌)
                     monthly_pnl['Color'] = monthly_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     fig_month = px.bar(
                         monthly_pnl, x='月', y='已實現損益', color='Color',
-                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'}, # 台股紅漲綠跌
+                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'},
                         text_auto='.2s'
                     )
                     fig_month.update_layout(showlegend=False, xaxis_title=None)
                     st.plotly_chart(fig_month, use_container_width=True)
 
+                # ------------------------------------------------
+                # 個股貢獻度 (修改為 Top 8 賺/賠)
+                # ------------------------------------------------
                 with chart_col2:
-                    st.markdown("##### 🏆 個股貢獻度排行榜")
+                    st.markdown("##### 🏆 個股貢獻度排行榜 (Top 8 賺/賠)")
                     stock_pnl = df_realized.groupby('股票')['已實現損益'].sum().reset_index()
-                    stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True) # 為了讓 bar chart 獲利在上方
+                    
+                    # 篩選邏輯：若超過 16 檔，只取賺最多前8與賠最多前8
+                    if len(stock_pnl) > 16:
+                        stock_pnl_sorted = stock_pnl.sort_values(by='已實現損益', ascending=False)
+                        top_8 = stock_pnl_sorted.head(8)
+                        bottom_8 = stock_pnl_sorted.tail(8)
+                        # 合併並去重 (防止資料少於16筆時重複)
+                        stock_pnl = pd.concat([top_8, bottom_8]).drop_duplicates()
+                    
+                    # 最終排序，讓圖表由虧(下)到賺(上)排列
+                    stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True)
                     
                     stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     fig_stock = px.bar(
@@ -298,19 +302,16 @@ try:
                     fig_stock.update_layout(showlegend=False, yaxis_title=None)
                     st.plotly_chart(fig_stock, use_container_width=True)
 
-                # --- C. 年度統計 ---
                 st.markdown("##### 🗓️ 年度損益統計")
                 yearly_pnl = df_realized.groupby('年')['已實現損益'].sum().reset_index()
                 yearly_pnl['累積損益'] = yearly_pnl['已實現損益'].cumsum()
                 
-                # 簡單表格顯示年度數據
                 st.dataframe(
                     yearly_pnl.style.format({"已實現損益": "${:,.0f}", "累積損益": "${:,.0f}"}),
                     use_container_width=True,
                     hide_index=True
                 )
 
-                # --- D. 明細表 (可摺疊) ---
                 with st.expander("查看詳細交易紀錄"):
                     st.dataframe(
                         df_realized[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
@@ -325,9 +326,6 @@ try:
         else:
             st.warning("目前沒有交易紀錄。")
 
-    # ------------------------------------------------
-    # Tab 2: 原始紀錄
-    # ------------------------------------------------
     with tab2:
         st.subheader("最近交易紀錄")
         if not df_raw.empty and '交易日期' in df_raw.columns:
