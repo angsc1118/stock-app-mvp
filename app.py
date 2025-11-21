@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px # 引入繪圖套件
 from datetime import date, datetime
 
 import database
@@ -47,21 +48,16 @@ def submit_callback():
     s_qty = st.session_state.txn_qty
     s_price = st.session_state.txn_price
     s_notes = st.session_state.txn_notes
-    
     s_discount = account_settings.get(s_account, 0.6)
 
     error_msgs = []
     if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
-    
     is_cash_flow = s_action in ['入金', '出金']
     if not is_cash_flow:
         if not s_id: error_msgs.append("❌ 請輸入「股票代號」")
         if not s_name: error_msgs.append("❌ 未輸入「股票名稱」")
-    
-    if s_action != '現金股利' and s_qty <= 0: 
-        error_msgs.append("❌ 「股數/數量」必須大於 0")
-    if s_action in ['買進', '賣出', '入金', '出金'] and s_price <= 0: 
-        error_msgs.append("❌ 「單價/金額」必須大於 0")
+    if s_action != '現金股利' and s_qty <= 0: error_msgs.append("❌ 「股數/數量」必須大於 0")
+    if s_action in ['買進', '賣出', '入金', '出金'] and s_price <= 0: error_msgs.append("❌ 「單價/金額」必須大於 0")
 
     if error_msgs:
         st.session_state["form_msg"] = {"type": "error", "content": error_msgs}
@@ -81,9 +77,7 @@ def submit_callback():
         except Exception as e:
             st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
 
-# ============================
-# Sidebar
-# ============================
+# --- Sidebar ---
 with st.sidebar:
     mode = st.radio("功能選擇", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
@@ -116,8 +110,7 @@ with st.sidebar:
         col3, col4 = st.columns(2)
         qty_label = "數量 (預設1)" if is_cash_op else "股數"
         price_label = "金額" if is_cash_op else "單價"
-        if is_cash_op and st.session_state["txn_qty"] == 0:
-            st.session_state["txn_qty"] = 1
+        if is_cash_op and st.session_state["txn_qty"] == 0: st.session_state["txn_qty"] = 1
 
         col3.number_input(qty_label, min_value=0, step=1000, key="txn_qty")
         col4.number_input(price_label, min_value=0.0, step=0.5, format="%.2f", key="txn_price")
@@ -161,14 +154,17 @@ with st.sidebar:
 # ============================
 # Main Content
 # ============================
-tab1, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📋 原始交易紀錄"])
+# 新增第3個分頁：已實現損益
+tab1, tab3, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📉 已實現損益分析", "📋 原始交易紀錄"])
 
 try:
     df_raw = database.load_data()
 
+    # ------------------------------------------------
+    # Tab 1: 庫存損益
+    # ------------------------------------------------
     with tab1:
         st.subheader("庫存損益試算 (FIFO)")
-        
         col_btn, col_time = st.columns([1.5, 4])
         if col_btn.button("🔄 更新即時股價 (Fugle API)"):
              if not df_raw.empty:
@@ -186,10 +182,8 @@ try:
             col_time.write("🕒 尚未更新股價 (顯示為庫存成本)")
 
         if not df_raw.empty:
-            # --- 資產計算 ---
             acc_balances = logic.calculate_account_balances(df_raw)
             total_cash = sum(acc_balances.values())
-
             df_fifo = logic.calculate_fifo_report(df_raw)
             total_market_value = 0
             df_final = pd.DataFrame()
@@ -202,38 +196,17 @@ try:
             total_assets = total_cash + total_market_value
             cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-            # --- 顯示資產概況 (修正順序與顏色) ---
             st.markdown("#### 💰 資產配置概況")
-            
-            # 決定顏色邏輯 (用於 delta_color 屬性或 CSS)
-            # >90 紅, 80-90 橘, 70-80 藍, 60-70 黃, <60 綠
-            # 因為 st.metric 的 delta_color 只有 normal, inverse, off
-            # 我們改用字串的顏色標記放到 value 中? 不行，metric value 只能是字串
-            # 依照您的需求：現金水位本身字體黑色，但顏色邏輯要呈現?
-            # 您的需求：「若大於90% 則該欄位為紅字...」
-            # 我們可以用 st.markdown 搭配 HTML 來實現該欄位的特定顏色
-            
-            if cash_ratio > 90: ratio_color = "#FF4B4B" # 紅
-            elif 80 <= cash_ratio < 90: ratio_color = "#FFA500" # 橘
-            elif 70 <= cash_ratio < 80: ratio_color = "#1E90FF" # 藍
-            elif 60 <= cash_ratio < 70: ratio_color = "#FFD700" # 黃
-            else: ratio_color = "#09AB3B" # 綠
+            if cash_ratio > 90: ratio_color = "#FF4B4B"
+            elif 80 <= cash_ratio < 90: ratio_color = "#FFA500"
+            elif 70 <= cash_ratio < 80: ratio_color = "#1E90FF"
+            elif 60 <= cash_ratio < 70: ratio_color = "#FFD700"
+            else: ratio_color = "#09AB3B"
 
             k1, k2, k3 = st.columns(3)
-            
-            # 1. 總資產
             k1.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
-            
-            # 2. 現金餘額
             k2.metric("總現金餘額", f"${int(total_cash):,}")
-            
-            # 3. 現金水位 (使用 HTML 來自定義顏色)
-            k3.markdown(f"""
-                <div>
-                    <div style="font-size: 14px; color: rgba(49, 51, 63, 0.6); margin-bottom: 4px;">現金水位</div>
-                    <div style="font-size: 32px; font-weight: 600; color: {ratio_color};">{cash_ratio:.2f}%</div>
-                </div>
-            """, unsafe_allow_html=True)
+            k3.metric("現金水位", f"{cash_ratio:.2f}%")
 
             st.divider()
 
@@ -250,38 +223,111 @@ try:
                 
                 def color_pnl(val):
                     if isinstance(val, (int, float)):
-                        color = 'red' if val > 0 else 'green' if val < 0 else 'black'
-                        return f'color: {color}'
+                        return f'color: {"red" if val > 0 else "green" if val < 0 else "black"}'
                     return ''
 
-                display_cols = [
-                    '股票', '庫存股數', '平均成本', 
-                    '目前市價', '股票市值', '未實現損益', '報酬率 (%)',
-                    '佔總資產比例 (%)', '賣出額外費用', '配息金額'
-                ]
-                
+                display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)', '賣出額外費用', '配息金額']
                 format_dict = {
-                    "庫存股數": "{:,.0f}",
-                    "平均成本": "{:,.2f}",
-                    "目前市價": "{:,.2f}",
-                    "股票市值": "{:,.0f}",
-                    "未實現損益": "{:,.0f}",
-                    "報酬率 (%)": "{:,.2f}%",
-                    "佔總資產比例 (%)": "{:,.2f}%",
-                    "配息金額": "{:,.0f}"
+                    "庫存股數": "{:,.0f}", "平均成本": "{:,.2f}", "目前市價": "{:,.2f}",
+                    "股票市值": "{:,.0f}", "未實現損益": "{:,.0f}", "報酬率 (%)": "{:,.2f}%",
+                    "佔總資產比例 (%)": "{:,.2f}%", "配息金額": "{:,.0f}"
                 }
-
-                st.dataframe(
-                    df_final[display_cols].style
-                    .format(format_dict)
-                    .map(color_pnl, subset=['未實現損益', '報酬率 (%)']), 
-                    use_container_width=True
-                )
+                st.dataframe(df_final[display_cols].style.format(format_dict).map(color_pnl, subset=['未實現損益', '報酬率 (%)']), use_container_width=True)
             else:
                 st.info("目前沒有庫存。")
         else:
             st.warning("目前沒有交易紀錄。")
 
+    # ------------------------------------------------
+    # Tab 3: 已實現損益 (新增功能)
+    # ------------------------------------------------
+    with tab3:
+        st.subheader("已實現損益分析 (Realized P&L)")
+        
+        if not df_raw.empty:
+            # 計算已實現損益
+            df_realized = logic.calculate_realized_report(df_raw)
+            
+            if not df_realized.empty:
+                # --- A. 關鍵指標 ---
+                total_realized_pnl = df_realized['已實現損益'].sum()
+                
+                # 篩選出只有「賣出」的交易來算勝率 (排除股利)
+                sell_trades = df_realized[df_realized['交易類別'] == '賣出']
+                win_trades = sell_trades[sell_trades['已實現損益'] > 0]
+                win_rate = (len(win_trades) / len(sell_trades) * 100) if not sell_trades.empty else 0
+                
+                total_div = df_realized[df_realized['交易類別'] == '股息']['已實現損益'].sum()
+                
+                kp1, kp2, kp3, kp4 = st.columns(4)
+                kp1.metric("總已實現損益", f"${total_realized_pnl:,.0f}")
+                kp2.metric("交易獲利 (不含息)", f"${sell_trades['已實現損益'].sum():,.0f}")
+                kp3.metric("現金股利總額", f"${total_div:,.0f}")
+                kp4.metric("交易勝率", f"{win_rate:.1f}%", help=f"獲利 {len(win_trades)} 筆 / 總計 {len(sell_trades)} 筆")
+                
+                st.divider()
+                
+                # --- B. 圖表分析 (左右兩欄) ---
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    st.markdown("##### 📅 月度損益趨勢")
+                    # 依照月份分組加總
+                    monthly_pnl = df_realized.groupby('月')['已實現損益'].sum().reset_index()
+                    # 繪製長條圖 (使用 Plotly，紅漲綠跌)
+                    monthly_pnl['Color'] = monthly_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
+                    fig_month = px.bar(
+                        monthly_pnl, x='月', y='已實現損益', color='Color',
+                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'}, # 台股紅漲綠跌
+                        text_auto='.2s'
+                    )
+                    fig_month.update_layout(showlegend=False, xaxis_title=None)
+                    st.plotly_chart(fig_month, use_container_width=True)
+
+                with chart_col2:
+                    st.markdown("##### 🏆 個股貢獻度排行榜")
+                    stock_pnl = df_realized.groupby('股票')['已實現損益'].sum().reset_index()
+                    stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True) # 為了讓 bar chart 獲利在上方
+                    
+                    stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
+                    fig_stock = px.bar(
+                        stock_pnl, y='股票', x='已實現損益', color='Color', orientation='h',
+                        color_discrete_map={'Profit': '#ef5350', 'Loss': '#26a69a'},
+                        text_auto='.2s'
+                    )
+                    fig_stock.update_layout(showlegend=False, yaxis_title=None)
+                    st.plotly_chart(fig_stock, use_container_width=True)
+
+                # --- C. 年度統計 ---
+                st.markdown("##### 🗓️ 年度損益統計")
+                yearly_pnl = df_realized.groupby('年')['已實現損益'].sum().reset_index()
+                yearly_pnl['累積損益'] = yearly_pnl['已實現損益'].cumsum()
+                
+                # 簡單表格顯示年度數據
+                st.dataframe(
+                    yearly_pnl.style.format({"已實現損益": "${:,.0f}", "累積損益": "${:,.0f}"}),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                # --- D. 明細表 (可摺疊) ---
+                with st.expander("查看詳細交易紀錄"):
+                    st.dataframe(
+                        df_realized[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
+                        .style.format({
+                            "已實現損益": "{:,.0f}", "本金(成本)": "{:,.0f}", "報酬率 (%)": "{:,.2f}%"
+                        })
+                        .map(lambda x: f'color: {"red" if x > 0 else "green" if x < 0 else "black"}', subset=['已實現損益', '報酬率 (%)']),
+                        use_container_width=True
+                    )
+            else:
+                st.info("尚無已實現損益紀錄 (尚未賣出股票或領取股息)。")
+        else:
+            st.warning("目前沒有交易紀錄。")
+
+    # ------------------------------------------------
+    # Tab 2: 原始紀錄
+    # ------------------------------------------------
     with tab2:
         st.subheader("最近交易紀錄")
         if not df_raw.empty and '交易日期' in df_raw.columns:
