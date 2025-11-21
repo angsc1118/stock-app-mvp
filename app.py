@@ -238,7 +238,7 @@ try:
             st.warning("目前沒有交易紀錄。")
 
     # ------------------------------------------------
-    # Tab 3: 已實現損益
+    # Tab 3: 已實現損益 (含月度篩選 & 個股查詢)
     # ------------------------------------------------
     with tab3:
         st.subheader("已實現損益分析 (Realized P&L)")
@@ -247,6 +247,7 @@ try:
             df_realized = logic.calculate_realized_report(df_raw)
             
             if not df_realized.empty:
+                # --- A. 關鍵指標 ---
                 total_realized_pnl = df_realized['已實現損益'].sum()
                 sell_trades = df_realized[df_realized['交易類別'] == '賣出']
                 win_trades = sell_trades[sell_trades['已實現損益'] > 0]
@@ -263,53 +264,65 @@ try:
                 
                 chart_col1, chart_col2 = st.columns(2)
                 
-                # 1. 月度損益圖 (修改顏色與 Hover 格式)
+                # 1. 月度損益圖 (只顯示近 12 個月)
                 with chart_col1:
-                    st.markdown("##### 📅 月度損益趨勢")
+                    st.markdown("##### 📅 月度損益趨勢 (近12個月)")
                     monthly_pnl = df_realized.groupby('月')['已實現損益'].sum().reset_index()
+                    # 排序並篩選最後 12 筆
+                    monthly_pnl = monthly_pnl.sort_values('月').tail(12)
+                    
                     monthly_pnl['Color'] = monthly_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     
                     fig_month = px.bar(
                         monthly_pnl, x='月', y='已實現損益', color='Color',
-                        # 修改：使用較暗的紅色 (#E53935) 取代原本的 #ef5350
                         color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
                         text_auto='.2s'
                     )
-                    # 修改：更新 Hover 顯示完整數字 (逗號分隔)，座標軸保留 K/M
                     fig_month.update_traces(hovertemplate='<b>%{x}</b><br>已實現損益: %{y:,.0f}<extra></extra>')
                     fig_month.update_layout(
                         showlegend=False, 
                         xaxis_title=None, 
-                        yaxis=dict(tickformat=".2s") # 座標軸保留 .2s (300k)
+                        yaxis=dict(tickformat=".2s")
                     )
                     st.plotly_chart(fig_month, use_container_width=True)
 
-                # 2. 個股貢獻度 (修改顏色與 Hover 格式)
+                # 2. 個股貢獻度 (新增查詢功能)
                 with chart_col2:
-                    st.markdown("##### 🏆 個股貢獻度排行榜 (Top 8 賺/賠)")
+                    st.markdown("##### 🏆 個股貢獻度")
+                    
+                    # 新增查詢工具
+                    all_realized_stocks = df_realized['股票'].unique()
+                    selected_stocks = st.multiselect("🔍 查詢特定個股 (留空則顯示 Top 8)", options=all_realized_stocks)
+                    
                     stock_pnl = df_realized.groupby('股票')['已實現損益'].sum().reset_index()
                     
-                    if len(stock_pnl) > 16:
-                        stock_pnl_sorted = stock_pnl.sort_values(by='已實現損益', ascending=False)
-                        top_8 = stock_pnl_sorted.head(8)
-                        bottom_8 = stock_pnl_sorted.tail(8)
-                        stock_pnl = pd.concat([top_8, bottom_8]).drop_duplicates()
+                    if selected_stocks:
+                        # 如果有選擇，只顯示選中的股票
+                        stock_pnl = stock_pnl[stock_pnl['股票'].isin(selected_stocks)]
+                        chart_height = 400 + (len(selected_stocks) * 20) # 動態調整高度
+                    else:
+                        # 如果沒選擇，維持原本 Top 8 邏輯
+                        chart_height = 400
+                        if len(stock_pnl) > 16:
+                            stock_pnl_sorted = stock_pnl.sort_values(by='已實現損益', ascending=False)
+                            top_8 = stock_pnl_sorted.head(8)
+                            bottom_8 = stock_pnl_sorted.tail(8)
+                            stock_pnl = pd.concat([top_8, bottom_8]).drop_duplicates()
                     
                     stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True)
                     stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     
                     fig_stock = px.bar(
                         stock_pnl, y='股票', x='已實現損益', color='Color', orientation='h',
-                        # 修改：使用較暗的紅色 (#E53935)
                         color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
                         text_auto='.2s'
                     )
-                    # 修改：更新 Hover 顯示完整數字
                     fig_stock.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
                     fig_stock.update_layout(
                         showlegend=False, 
                         yaxis_title=None,
-                        xaxis=dict(tickformat=".2s") # 座標軸保留 .2s
+                        xaxis=dict(tickformat=".2s"),
+                        height=chart_height # 讓大量查詢時不會擠在一起
                     )
                     st.plotly_chart(fig_stock, use_container_width=True)
 
