@@ -160,7 +160,7 @@ try:
     df_raw = database.load_data()
 
     # ------------------------------------------------
-    # Tab 1: 庫存損益
+    # Tab 1: 庫存損益 (新增圖表)
     # ------------------------------------------------
     with tab1:
         st.subheader("庫存損益試算 (FIFO)")
@@ -195,6 +195,7 @@ try:
             total_assets = total_cash + total_market_value
             cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
+            # --- 指標區塊 ---
             st.markdown("#### 💰 資產配置概況")
             if cash_ratio > 90: ratio_color = "#FF4B4B"
             elif 80 <= cash_ratio < 90: ratio_color = "#FFA500"
@@ -207,8 +208,48 @@ try:
             k2.metric("總現金餘額", f"${int(total_cash):,}")
             k3.metric("現金水位", f"{cash_ratio:.2f}%")
 
+            # --- [新增功能] 資產配置視覺化圖表 ---
+            st.divider()
+            
+            if total_assets > 0:
+                chart_col1, chart_col2 = st.columns(2)
+                
+                # 1. 總資產分配 (現金 vs 股票)
+                with chart_col1:
+                    st.markdown("##### 🍰 總資產配置 (現金 vs 股票)")
+                    alloc_df = pd.DataFrame({
+                        '類別': ['現金', '股票'],
+                        '金額': [total_cash, total_market_value]
+                    })
+                    fig_alloc = px.pie(
+                        alloc_df, values='金額', names='類別', 
+                        hole=0.4, # 甜甜圈圖
+                        color='類別',
+                        color_discrete_map={'現金': '#00CC96', '股票': '#EF553B'}
+                    )
+                    fig_alloc.update_traces(textinfo='percent+label')
+                    st.plotly_chart(fig_alloc, use_container_width=True)
+
+                # 2. 持股配置 (依市值)
+                with chart_col2:
+                    st.markdown("##### 📊 持股配置 (依市值)")
+                    if not df_final.empty and total_market_value > 0:
+                        # 使用 TreeMap (矩形圖) 或 Pie Chart
+                        # 這裡選用 Pie Chart 比較直觀
+                        fig_stock_pie = px.pie(
+                            df_final, values='股票市值', names='股票',
+                            hole=0.4
+                        )
+                        # 若持股太多，Pie Chart 會很亂，Plotly 自動處理隱藏太小的標籤
+                        fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
+                        fig_stock_pie.update_layout(showlegend=False) # 隱藏圖例避免太長
+                        st.plotly_chart(fig_stock_pie, use_container_width=True)
+                    else:
+                        st.info("目前無持股部位")
+
             st.divider()
 
+            # --- 股票列表 ---
             if not df_final.empty:
                 total_stock_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_stock_pnl = df_final['未實現損益'].sum()
@@ -238,7 +279,7 @@ try:
             st.warning("目前沒有交易紀錄。")
 
     # ------------------------------------------------
-    # Tab 3: 已實現損益 (新增年度篩選)
+    # Tab 3: 已實現損益
     # ------------------------------------------------
     with tab3:
         st.subheader("已實現損益分析 (Realized P&L)")
@@ -247,28 +288,20 @@ try:
             df_realized = logic.calculate_realized_report(df_raw)
             
             if not df_realized.empty:
-                # --- [新增功能] 年度篩選器 ---
-                # 取得所有年份並排序 (降冪)
                 all_years = sorted(df_realized['年'].unique().tolist(), reverse=True)
-                # 選項包含 "全部" 與 個別年份
                 year_options = ["全部"] + all_years
                 
-                # 放置在最上方
                 col_filter, _ = st.columns([1, 3])
                 selected_year = col_filter.selectbox("📅 選擇檢視年度", year_options)
                 
-                # 根據選擇過濾資料 (建立 view)
                 if selected_year == "全部":
                     df_view = df_realized
                 else:
                     df_view = df_realized[df_realized['年'] == selected_year]
                 
-                # 若該年度無資料
                 if df_view.empty:
                     st.info(f"{selected_year} 年度尚無已實現損益紀錄。")
                 else:
-                    # --- 以下計算皆使用 df_view (過濾後的資料) ---
-                    
                     total_realized_pnl = df_view['已實現損益'].sum()
                     sell_trades = df_view[df_view['交易類別'] == '賣出']
                     win_trades = sell_trades[sell_trades['已實現損益'] > 0]
@@ -285,12 +318,10 @@ try:
                     
                     chart_col1, chart_col2 = st.columns(2)
                     
-                    # 1. 月度損益圖 (邏輯：若選全部顯示近12月；若選特定年顯示該年所有月份)
                     with chart_col1:
                         st.markdown(f"##### 📅 月度損益趨勢 ({selected_year})")
                         monthly_pnl = df_view.groupby('月')['已實現損益'].sum().reset_index()
                         
-                        # 若選 "全部"，只顯示最近 12 個月
                         if selected_year == "全部":
                             monthly_pnl = monthly_pnl.sort_values('月').tail(12)
                         else:
@@ -311,11 +342,8 @@ try:
                         )
                         st.plotly_chart(fig_month, use_container_width=True)
 
-                    # 2. 個股貢獻度
                     with chart_col2:
                         st.markdown("##### 🏆 個股貢獻度")
-                        
-                        # 查詢工具 (選項只列出目前 view 中有的股票)
                         all_view_stocks = df_view['股票'].unique()
                         selected_stocks = st.multiselect("🔍 查詢特定個股 (留空顯示 Top 8)", options=all_view_stocks)
                         
@@ -351,7 +379,6 @@ try:
 
                     st.markdown("##### 🗓️ 年度損益統計")
                     yearly_pnl = df_view.groupby('年')['已實現損益'].sum().reset_index()
-                    # 若選特定年，累積損益意義不大，僅在全部模式下有意義；但這裡保留欄位
                     yearly_pnl['累積損益'] = yearly_pnl['已實現損益'].cumsum()
                     
                     st.dataframe(
