@@ -154,13 +154,13 @@ with st.sidebar:
 # ============================
 # Main Content
 # ============================
-tab1, tab3, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📉 已實現損益分析", "📋 原始交易紀錄"])
+tab1, tab3, tab4, tab2 = st.tabs(["📊 資產庫存 (FIFO)", "📉 已實現損益", "📈 資產趨勢", "📋 原始交易"])
 
 try:
     df_raw = database.load_data()
 
     # ------------------------------------------------
-    # Tab 1: 庫存損益 (新增圖表)
+    # Tab 1: 庫存損益
     # ------------------------------------------------
     with tab1:
         st.subheader("庫存損益試算 (FIFO)")
@@ -195,61 +195,49 @@ try:
             total_assets = total_cash + total_market_value
             cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-            # --- 指標區塊 ---
             st.markdown("#### 💰 資產配置概況")
-            if cash_ratio > 90: ratio_color = "#FF4B4B"
-            elif 80 <= cash_ratio < 90: ratio_color = "#FFA500"
-            elif 70 <= cash_ratio < 80: ratio_color = "#1E90FF"
-            elif 60 <= cash_ratio < 70: ratio_color = "#FFD700"
-            else: ratio_color = "#09AB3B"
+            
+            # [新增] 記錄資產歷史的按鈕
+            col_assets, col_record_btn = st.columns([4, 1])
+            with col_assets:
+                k1, k2, k3 = st.columns(3)
+                k1.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
+                k2.metric("總現金餘額", f"${int(total_cash):,}")
+                k3.metric("現金水位", f"{cash_ratio:.2f}%")
+            
+            with col_record_btn:
+                if st.button("📝 記錄今日資產"):
+                    try:
+                        database.save_asset_history(date.today(), int(total_assets), int(total_cash), int(total_market_value))
+                        st.success("已記錄！")
+                    except Exception as e:
+                        st.error(f"記錄失敗: {e}")
 
-            k1, k2, k3 = st.columns(3)
-            k1.metric("總資產 (現金+持股)", f"${int(total_assets):,}")
-            k2.metric("總現金餘額", f"${int(total_cash):,}")
-            k3.metric("現金水位", f"{cash_ratio:.2f}%")
-
-            # --- [新增功能] 資產配置視覺化圖表 ---
             st.divider()
             
+            # 資產圓餅圖
             if total_assets > 0:
                 chart_col1, chart_col2 = st.columns(2)
-                
-                # 1. 總資產分配 (現金 vs 股票)
                 with chart_col1:
-                    st.markdown("##### 🍰 總資產配置 (現金 vs 股票)")
                     alloc_df = pd.DataFrame({
                         '類別': ['現金', '股票'],
                         '金額': [total_cash, total_market_value]
                     })
-                    fig_alloc = px.pie(
-                        alloc_df, values='金額', names='類別', 
-                        hole=0.4, # 甜甜圈圖
-                        color='類別',
-                        color_discrete_map={'現金': '#00CC96', '股票': '#EF553B'}
-                    )
+                    fig_alloc = px.pie(alloc_df, values='金額', names='類別', hole=0.4, color='類別', color_discrete_map={'現金': '#00CC96', '股票': '#EF553B'})
                     fig_alloc.update_traces(textinfo='percent+label')
                     st.plotly_chart(fig_alloc, use_container_width=True)
 
-                # 2. 持股配置 (依市值)
                 with chart_col2:
-                    st.markdown("##### 📊 持股配置 (依市值)")
                     if not df_final.empty and total_market_value > 0:
-                        # 使用 TreeMap (矩形圖) 或 Pie Chart
-                        # 這裡選用 Pie Chart 比較直觀
-                        fig_stock_pie = px.pie(
-                            df_final, values='股票市值', names='股票',
-                            hole=0.4
-                        )
-                        # 若持股太多，Pie Chart 會很亂，Plotly 自動處理隱藏太小的標籤
+                        fig_stock_pie = px.pie(df_final, values='股票市值', names='股票', hole=0.4)
                         fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
-                        fig_stock_pie.update_layout(showlegend=False) # 隱藏圖例避免太長
+                        fig_stock_pie.update_layout(showlegend=False)
                         st.plotly_chart(fig_stock_pie, use_container_width=True)
                     else:
                         st.info("目前無持股部位")
 
             st.divider()
 
-            # --- 股票列表 ---
             if not df_final.empty:
                 total_stock_cost = df_final['總持有成本 (FIFO)'].sum()
                 total_stock_pnl = df_final['未實現損益'].sum()
@@ -283,14 +271,12 @@ try:
     # ------------------------------------------------
     with tab3:
         st.subheader("已實現損益分析 (Realized P&L)")
-        
         if not df_raw.empty:
             df_realized = logic.calculate_realized_report(df_raw)
             
             if not df_realized.empty:
                 all_years = sorted(df_realized['年'].unique().tolist(), reverse=True)
                 year_options = ["全部"] + all_years
-                
                 col_filter, _ = st.columns([1, 3])
                 selected_year = col_filter.selectbox("📅 選擇檢視年度", year_options)
                 
@@ -321,32 +307,19 @@ try:
                     with chart_col1:
                         st.markdown(f"##### 📅 月度損益趨勢 ({selected_year})")
                         monthly_pnl = df_view.groupby('月')['已實現損益'].sum().reset_index()
-                        
-                        if selected_year == "全部":
-                            monthly_pnl = monthly_pnl.sort_values('月').tail(12)
-                        else:
-                            monthly_pnl = monthly_pnl.sort_values('月')
+                        if selected_year == "全部": monthly_pnl = monthly_pnl.sort_values('月').tail(12)
+                        else: monthly_pnl = monthly_pnl.sort_values('月')
                         
                         monthly_pnl['Color'] = monthly_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
-                        
-                        fig_month = px.bar(
-                            monthly_pnl, x='月', y='已實現損益', color='Color',
-                            color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
-                            text_auto='.2s'
-                        )
+                        fig_month = px.bar(monthly_pnl, x='月', y='已實現損益', color='Color', color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
                         fig_month.update_traces(hovertemplate='<b>%{x}</b><br>已實現損益: %{y:,.0f}<extra></extra>')
-                        fig_month.update_layout(
-                            showlegend=False, 
-                            xaxis_title=None, 
-                            yaxis=dict(tickformat=".2s")
-                        )
+                        fig_month.update_layout(showlegend=False, xaxis_title=None, yaxis=dict(tickformat=".2s"))
                         st.plotly_chart(fig_month, use_container_width=True)
 
                     with chart_col2:
                         st.markdown("##### 🏆 個股貢獻度")
                         all_view_stocks = df_view['股票'].unique()
                         selected_stocks = st.multiselect("🔍 查詢特定個股 (留空顯示 Top 8)", options=all_view_stocks)
-                        
                         stock_pnl = df_view.groupby('股票')['已實現損益'].sum().reset_index()
                         
                         if selected_stocks:
@@ -362,45 +335,60 @@ try:
                         
                         stock_pnl = stock_pnl.sort_values(by='已實現損益', ascending=True)
                         stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
-                        
-                        fig_stock = px.bar(
-                            stock_pnl, y='股票', x='已實現損益', color='Color', orientation='h',
-                            color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'},
-                            text_auto='.2s'
-                        )
+                        fig_stock = px.bar(stock_pnl, y='股票', x='已實現損益', color='Color', orientation='h', color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
                         fig_stock.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
-                        fig_stock.update_layout(
-                            showlegend=False, 
-                            yaxis_title=None,
-                            xaxis=dict(tickformat=".2s"),
-                            height=chart_height
-                        )
+                        fig_stock.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"), height=chart_height)
                         st.plotly_chart(fig_stock, use_container_width=True)
 
                     st.markdown("##### 🗓️ 年度損益統計")
                     yearly_pnl = df_view.groupby('年')['已實現損益'].sum().reset_index()
                     yearly_pnl['累積損益'] = yearly_pnl['已實現損益'].cumsum()
-                    
-                    st.dataframe(
-                        yearly_pnl.style.format({"已實現損益": "${:,.0f}", "累積損益": "${:,.0f}"}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                    st.dataframe(yearly_pnl.style.format({"已實現損益": "${:,.0f}", "累積損益": "${:,.0f}"}), use_container_width=True, hide_index=True)
 
                     with st.expander("查看詳細交易紀錄"):
-                        st.dataframe(
-                            df_view[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
-                            .style.format({
-                                "已實現損益": "{:,.0f}", "本金(成本)": "{:,.0f}", "報酬率 (%)": "{:,.2f}%"
-                            })
-                            .map(lambda x: f'color: {"red" if x > 0 else "green" if x < 0 else "black"}', subset=['已實現損益', '報酬率 (%)']),
-                            use_container_width=True
-                        )
+                        st.dataframe(df_view[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']].style.format({"已實現損益": "{:,.0f}", "本金(成本)": "{:,.0f}", "報酬率 (%)": "{:,.2f}%"}).map(lambda x: f'color: {"red" if x > 0 else "green" if x < 0 else "black"}', subset=['已實現損益', '報酬率 (%)']), use_container_width=True)
             else:
-                st.info("尚無已實現損益紀錄 (尚未賣出股票或領取股息)。")
+                st.info("尚無已實現損益紀錄。")
         else:
             st.warning("目前沒有交易紀錄。")
 
+    # ------------------------------------------------
+    # Tab 4: 資產趨勢 (新增)
+    # ------------------------------------------------
+    with tab4:
+        st.subheader("📈 資產淨值歷史曲線")
+        df_history = database.load_asset_history()
+        
+        if not df_history.empty:
+            # 資料處理
+            df_history['日期'] = pd.to_datetime(df_history['日期'])
+            # 每個日期只保留最後一筆 (避免一天多次記錄造成圖表混亂)
+            df_history = df_history.sort_values('日期').drop_duplicates(subset=['日期'], keep='last')
+            
+            # 1. 總資產折線圖
+            fig_trend = px.line(df_history, x='日期', y='總資產', title="總資產成長趨勢", markers=True)
+            fig_trend.update_traces(line_color='#2E86C1', line_width=3)
+            fig_trend.update_layout(xaxis_title=None, yaxis_title=None, yaxis=dict(tickformat=",.0f"))
+            st.plotly_chart(fig_trend, use_container_width=True)
+            
+            # 2. 結構堆疊圖 (現金 vs 股票)
+            st.markdown("##### 📊 資產結構變化")
+            # 轉換為長格式以便堆疊繪圖
+            df_melt = df_history.melt(id_vars=['日期'], value_vars=['總現金', '總持股市值'], var_name='資產類別', value_name='金額')
+            
+            fig_stack = px.area(df_melt, x='日期', y='金額', color='資產類別', 
+                                color_discrete_map={'總現金': '#00CC96', '總持股市值': '#EF553B'})
+            fig_stack.update_layout(xaxis_title=None, yaxis_title=None, yaxis=dict(tickformat=",.0f"))
+            st.plotly_chart(fig_stack, use_container_width=True)
+            
+            with st.expander("查看歷史紀錄數據"):
+                st.dataframe(df_history.sort_values('日期', ascending=False), use_container_width=True)
+        else:
+            st.info("尚無歷史紀錄。請至「資產庫存」頁面點擊「📝 記錄今日資產」按鈕來開始累積數據。")
+
+    # ------------------------------------------------
+    # Tab 2: 原始紀錄
+    # ------------------------------------------------
     with tab2:
         st.subheader("最近交易紀錄")
         if not df_raw.empty and '交易日期' in df_raw.columns:
