@@ -2,8 +2,7 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
-# 2025-11-23: [Update] 新增「除錯模式」，顯示歷史K線末3筆資料以驗證 Vol10
+# 2025-11-23: [Update] 修正格式顯示錯誤 (移除 sprintf)，改用 Python f-string 預先格式化
 # ==============================================================================
 
 import streamlit as st
@@ -79,7 +78,6 @@ with st.sidebar:
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
-    # 1. 決定要監控的股票清單
     target_stocks = []
     if selected_group == "全部":
         watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
@@ -94,41 +92,33 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.info("此群組無股票可監控。")
         return
 
-    # 2. 抓取資料
     try:
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
-        # 從 Session 讀取 TA 資料
         ta_data = st.session_state.get("ta_data", {})
     except Exception as e:
         st.error(f"資料抓取失敗: {e}")
         return
 
-    # 3. 取得當前時間與倍數
     tw_now = datetime.utcnow() + timedelta(hours=8)
     current_time_str = tw_now.strftime("%H:%M")
     multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
 
-    # 4. 組裝表格資料
     table_rows = []
     alerts = []
-    
-    # 用來收集 Debug 資訊
     debug_list = []
 
     for symbol in target_stocks:
         quote = quotes.get(symbol, {})
         price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0) # 盤中量 (張)
+        vol = quote.get('volume', 0)
         
-        # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
+        vol_10ma = ta.get('Vol10', 0)
         
-        # 收集 Debug 資訊
         if 'debug_info' in ta:
             debug_list.append({
                 '股票代號': symbol,
@@ -136,10 +126,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 '歷史資料(末3筆)': ta['debug_info']
             })
         
-        # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
-        # 取得基本資料
         name = ""
         high_limit = 0
         low_limit = 0
@@ -155,7 +143,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_map = database.get_stock_info_map()
             name = stock_map.get(symbol, symbol)
 
-        # 警示
         status_icon = ""
         if high_limit > 0 and price >= high_limit:
             alerts.append(f"🔴 **{name} ({symbol})** 突破目標價 {high_limit} (現價 {price})")
@@ -168,21 +155,33 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         elif vol_ratio > 1.5: status_icon += "🟢"
         if bias > 20: status_icon += "⚠️"
         
+        # 格式化處理 (轉為字串，避免 Streamlit NumberColumn 格式錯誤)
+        # 現價：移除 $，千分位，兩位小數
+        price_str = f"{price:,.2f}"
+        
+        # 漲跌幅：百分比
+        # Fugle API 若回傳 0.055 -> 5.50%
+        chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%" # 簡易判斷 API 格式
+
+        # 成交量：千分位
+        vol_str = f"{vol:,}"
+        est_vol_str = f"{est_vol:,}"
+        vol_10ma_str = f"{int(vol_10ma):,}"
+
         table_rows.append({
             "代號": symbol,
             "名稱": name,
-            "現價": price,
-            "漲跌幅": chg, # 這裡直接給 API 的值 (例如 0.05)，Streamlit 會乘 100 顯示
-            "成交量": vol,
-            "預估量": est_vol,
-            "10日均量": int(vol_10ma),
-            "量比": vol_ratio,
-            "月線乖離率": f"{bias}%",
+            "現價": price_str,   # 使用格式化後的字串
+            "漲跌幅": chg_str,   # 使用格式化後的字串
+            "成交量": vol_str,   # 使用格式化後的字串
+            "預估量": est_vol_str,
+            "10日均量": vol_10ma_str,
+            "量比": f"{vol_ratio:.2f}",
+            "月線乖離率": f"{bias:.2f}%",
             "技術訊號": signal,
             "警示": status_icon
         })
 
-    # 5. 顯示內容
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 預估倍數: {multiplier}")
 
     if alerts:
@@ -191,21 +190,14 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
     if table_rows:
         df_display = pd.DataFrame(table_rows)
+        
+        # 因為都轉成字串了，這裡直接顯示即可，不需要 NumberColumn 的 format
         st.dataframe(
             df_display,
-            column_config={
-                "漲跌幅": st.column_config.NumberColumn("漲跌幅", format="%.2f%%"),
-                "現價": st.column_config.NumberColumn("現價", format="%,.2f"), # 千分位 + 2位小數
-                "成交量": st.column_config.NumberColumn("現量", format="%,d"), # 千分位
-                "預估量": st.column_config.NumberColumn("預估量", format="%,d"), # 千分位
-                "10日均量": st.column_config.NumberColumn("10MA量", format="%,d"), # 千分位
-                "量比": st.column_config.NumberColumn("量比", format="%.2f")
-            },
             use_container_width=True,
             hide_index=True
         )
         
-        # 手動更新 TA 按鈕
         if st.button("🔄 更新技術指標 (均線/均量)"):
             with st.spinner("計算技術指標中..."):
                 new_ta = market_data.get_batch_technical_analysis(target_stocks)
@@ -214,7 +206,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 st.session_state["ta_data"] = current_ta
                 st.rerun()
                 
-        # --- [新增] 除錯資訊區塊 ---
         with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
             st.markdown("此處顯示 API 抓取到的**歷史 K 線末 3 筆資料**。請確認：")
             st.markdown("1. 日期是否包含今天？(若有，Vol10 會被拉低)")
