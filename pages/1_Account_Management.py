@@ -2,7 +2,7 @@
 # 檔案名稱: pages/1_Account_Management.py
 # 
 # 修改歷程:
-# 2025-11-23: [Update] 整合記帳、校正、庫存列表、已實現損益分析於單一頁面
+# 2025-11-23: [Update] 調整版面配置，將交易帳戶與交易日期分開顯示
 # ==============================================================================
 
 import streamlit as st
@@ -98,9 +98,12 @@ with st.sidebar:
     mode = st.radio("選擇功能", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
-        col1, col2 = st.columns(2)
-        col1.date_input("交易日期", key="txn_date")
-        col2.selectbox("交易帳戶", options=account_list, key="txn_account")
+        # [修改] 調整佈局：日期獨佔一行
+        st.date_input("交易日期", key="txn_date")
+        
+        # [修改] 帳戶與類別放同一行 (或是獨佔一行也可，這裡示範獨佔一行更清楚)
+        st.selectbox("交易帳戶", options=account_list, key="txn_account")
+        
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
         is_cash_op = input_action in ['入金', '出金']
 
@@ -116,12 +119,13 @@ with st.sidebar:
                     st.session_state["txn_stock_name"] = found_name
                     st.rerun()
 
-        col2 = st.empty()
+        # 股票名稱欄位
         if is_cash_op:
             st.text_input("股票名稱", placeholder="(可留空)", key="txn_stock_name")
         else:
             st.text_input("股票名稱", placeholder="自動帶入", key="txn_stock_name")
 
+        # 股數與價格並排
         col3, col4 = st.columns(2)
         qty_label = "數量 (1)" if is_cash_op else "股數"
         price_label = "金額" if is_cash_op else "單價"
@@ -129,11 +133,13 @@ with st.sidebar:
 
         col3.number_input(qty_label, min_value=0, step=1000, key="txn_qty")
         col4.number_input(price_label, min_value=0.0, step=0.5, format="%.2f", key="txn_price")
+        
         st.text_area("備註", placeholder="選填", key="txn_notes")
         st.button("💾 提交交易", on_click=submit_callback, use_container_width=True)
         
     else:
         st.info("自動計算差額並產生修正交易")
+        # 校正模式下，帳戶選擇已經是獨佔一行，無需調整
         adj_account = st.selectbox("選擇校正帳戶", options=account_list)
         try:
             if not df_raw.empty:
