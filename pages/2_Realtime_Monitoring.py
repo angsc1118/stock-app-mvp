@@ -103,7 +103,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         return
 
     # 3. 取得當前時間與倍數 (使用台灣時間)
-    # 必須加 8 小時，因為 Streamlit Cloud 是 UTC
     tw_now = datetime.utcnow() + timedelta(hours=8)
     current_time_str = tw_now.strftime("%H:%M")
     
@@ -118,22 +117,19 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         quote = quotes.get(symbol, {})
         price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0) # 這是「張」數
+        vol = quote.get('volume', 0)
         
         # 取得 TA
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
+        vol_10ma = ta.get('Vol10', 0) # 10日均量
         
-        # 計算動能 (量比)
-        # 注意：成交量單位要一致 (通常 API 回傳單位是股或張，需確認)
-        # Fugle API 成交量單位通常是「張」(board_lot)，若是零股需注意
-        # 假設 Vol10 與 vol 單位一致
+        # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
-        # 取得基本資料 (名稱、警示設定)
+        # 取得基本資料
         name = ""
         high_limit = 0
         low_limit = 0
@@ -161,11 +157,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             alerts.append(f"📉 **{name} ({symbol})** 跌破支撐價 {low_limit} (現價 {price})")
             status_icon += "📉"
             
-        # B. 動能警示 (量比)
-        if vol_ratio > 2.0:
-            status_icon += "🔥" # 爆量
-        elif vol_ratio > 1.5:
-            status_icon += "🟢" # 增量
+        # B. 動能警示
+        if vol_ratio > 2.0: status_icon += "🔥"
+        elif vol_ratio > 1.5: status_icon += "🟢"
             
         # C. 技術警示
         if bias > 20: status_icon += "⚠️"
@@ -197,21 +191,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.dataframe(
             df_display,
             column_config={
-                "漲跌幅": st.column_config.NumberColumn(
-                    "漲跌幅",
-                    format="%.2f%%",
-                ),
-                "現價": st.column_config.NumberColumn(
-                    "現價",
-                    format="$%.2f",
-                ),
+                "漲跌幅": st.column_config.NumberColumn("漲跌幅", format="%.2f%%"),
+                "現價": st.column_config.NumberColumn("現價", format="$%.2f"),
                 "成交量": st.column_config.NumberColumn("現量", format="%d"),
                 "預估量": st.column_config.NumberColumn("預估量", format="%d"),
                 "10日均量": st.column_config.NumberColumn("10MA量", format="%d"),
-                "量比": st.column_config.NumberColumn(
-                    "量比",
-                    format="%.2f",
-                )
+                "量比": st.column_config.NumberColumn("量比", format="%.2f")
             },
             use_container_width=True,
             hide_index=True
