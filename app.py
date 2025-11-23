@@ -1,3 +1,10 @@
+# ==============================================================================
+# 檔案名稱: app.py
+# 
+# 修改歷程:
+# 2025-11-23: [Refactor] 重構為首頁 Dashboard；移除記帳功能(移至 pages/1)；保留全域更新與紀錄按鈕
+# ==============================================================================
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -39,7 +46,7 @@ with st.sidebar:
                 stock_ids = temp_fifo['股票代號'].unique().tolist()
                 with st.spinner('連線 API 更新報價中...'):
                     prices = market_data.get_realtime_prices(stock_ids)
-                    # 順便更新技術指標
+                    # 順便更新技術指標 (MA, Vol10) 供監控與庫存使用
                     ta_data = market_data.get_batch_technical_analysis(stock_ids)
                 
                 st.session_state["realtime_prices"] = prices
@@ -164,17 +171,19 @@ def render_dashboard(df_raw, auto_refresh=False):
         st.subheader("🍰 現金配置 (各帳戶) vs 持股")
         if total_assets > 0:
             pie_data = []
+            # 收集資料
             for acc_name, amount in acc_balances.items():
-                if amount > 0:
-                    pie_data.append({'類別': f'現金-{acc_name}', '金額': amount, 'Type': 'Cash'})
+                pie_data.append({'類別': f'現金-{acc_name}', '金額': amount, 'Type': 'Cash'})
             if total_market_value > 0:
                 pie_data.append({'類別': '股票部位', '金額': total_market_value, 'Type': 'Stock'})
             
             df_pie_alloc = pd.DataFrame(pie_data)
             
+            # 除錯資訊 (預設摺疊)
             with st.expander("查看詳細數值 (Debug)"):
                 st.write(df_pie_alloc)
 
+            # 過濾負數繪圖
             df_pie_chart = df_pie_alloc[df_pie_alloc['金額'] > 0] if not df_pie_alloc.empty else pd.DataFrame()
 
             if not df_pie_chart.empty:
@@ -183,7 +192,7 @@ def render_dashboard(df_raw, auto_refresh=False):
                 fig_alloc.update_layout(hoverlabel=dict(font_size=20))
                 st.plotly_chart(fig_alloc, use_container_width=True)
             else:
-                st.warning("所有資產數值皆為 0 或負數。")
+                st.warning("所有資產數值皆為 0 或負數，無法繪製圓餅圖。")
         else:
             st.info("資產為 0")
 
