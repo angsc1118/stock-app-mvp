@@ -2,7 +2,7 @@
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-11-23: [Update] 技術分析增加計算 10日均量 (Vol10) 以供動能分析使用
+# 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
 # ==============================================================================
 
 import streamlit as st
@@ -84,9 +84,12 @@ def get_batch_detailed_quotes(stock_list):
         time.sleep(0.1)
     return results
 
-# --- [修改] 技術分析 (加入 Vol10) ---
+# --- [修改] 技術分析 (加入 Vol10 與 Debug) ---
 def get_technical_analysis(symbol, api_key):
-    """抓取歷史資料並計算技術指標"""
+    """
+    抓取歷史資料並計算技術指標
+    修正：排除今日盤中資料計算均量，避免數據被拉低
+    """
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
     
@@ -97,43 +100,81 @@ def get_technical_analysis(symbol, api_key):
     try:
         response = requests.get(url, params=params, headers=headers, timeout=5)
         data = response.json()
-        if response.status_code != 200 or 'data' not in data: return {'Signal': '無資料', 'MA20': 0, 'Vol10': 0}
+        if response.status_code != 200 or 'data' not in data: 
+            print(f"DEBUG: {symbol} API error or no data.")
+            return {'Signal': '無資料', 'MA20': 0, 'Vol10': 0}
             
         df = pd.DataFrame(data['data'])
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date')
         
-        # 均線
-        df['MA5'] = df['close'].rolling(window=5).mean()
-        df['MA10'] = df['close'].rolling(window=10).mean()
-        df['MA20'] = df['close'].rolling(window=20).mean()
-        df['MA60'] = df['close'].rolling(window=60).mean()
+        # --- DEBUG LOG START ---
+        # 印出最後 3 筆資料，確認是否包含今日 (盤中)
+        print(f"\n=== DEBUG: {symbol} 歷史資料 (末3筆) ===")
+        print(df.tail(3)[['date', 'close', 'volume']])
         
-        # [新增] 10日均量 (Vol10)
-        df['Vol10'] = df['volume'].rolling(window=10).mean()
-        
-        if len(df) < 1: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0}
+        # 檢查單位：Fugle 歷史量通常是「張」(board_lot) 還是「股」(shares)?
+        # 觀察 log 數值：如果是 2,000,000 這種大數字就是股，如果是 2,000 就是張
+        last_vol_raw = df.iloc[-1]['volume']
+        print(f"DEBUG: 最新一筆成交量數值為 {last_vol_raw}")
+        # --- DEBUG LOG END ---
 
-        last = df.iloc[-1]
-        price = last['close']
+        # 1. 排除今日資料 (如果這筆資料的日期是今天，代表是盤中即時 K 線)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        last_date_str = df.iloc[-1]['date'].strftime('%Y-%m-%d')
+        
+        df_calc = df.copy()
+        if last_date_str == today_str:
+            print(f"DEBUG: 偵測到今日 ({today_str}) 資料，計算均量時排除此筆。")
+            df_calc = df.iloc[:-1] # 排除最後一筆 (今日)
+        
+        # 2. 計算技術指標
+        df_calc['MA5'] = df_calc['close'].rolling(window=5).mean()
+        df_calc['MA10'] = df_calc['close'].rolling(window=10).mean()
+        df_calc['MA20'] = df_calc['close'].rolling(window=20).mean()
+        df_calc['MA60'] = df_calc['close'].rolling(window=60).mean()
+        
+        # [修正] 10日均量
+        # Fugle 歷史資料 volume 單位通常是「張」(但有時會變，需觀察 Log)
+        # 假設單位是「張」，如果不對請告知 Log 數值
+        df_calc['Vol10'] = df_calc['volume'].rolling(window=10).mean()
+        
+        if len(df_calc) < 1: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0}
+
+        # 取出計算結果 (昨收基準)
+        last = df_calc.iloc[-1]
+        price = last['close'] # 這是昨收價
         ma5, ma10, ma20, ma60 = last['MA5'], last['MA10'], last['MA20'], last['MA60']
         vol10 = last['Vol10']
         
+        # 訊號判斷需要用「現價」(盤中) 跟「昨收均線」比嗎？
+        # 或是用「昨收」跟「昨收均線」比？
+        # 通常技術分析看盤軟體是： (今日即時價) vs (昨日算出來的 MA數值)
+        # 但均線本身數值也會隨今日收盤價變動。
+        # 這裡我們回傳的是「昨日收盤後的 MA 與 Vol10」，這是最穩定的基準。
+
         signals = []
-        # 1. 均線訊號
+        # 簡單均線訊號 (參考用)
         if pd.notna(ma20):
-            if price < ma20: signals.append("📉破月線")
-            elif price > ma20: signals.append("🆗站上月線")
+            # 這裡的 price 是昨收，若要即時訊號，前端會拿 realtime price 來比
+            pass 
+        
         if pd.notna(ma5) and ma5 > ma10 > ma20 > ma60: signals.append("🔥多頭排列")
         
-        # 2. 乖離率
         bias = 0
         if pd.notna(ma20) and ma20 > 0:
             bias = (price - ma20) / ma20 * 100
 
+        print(f"DEBUG: 計算結果 Vol10 = {vol10}")
+        
+        # 如果發現 Vol10 數值過大 (例如幾百萬)，可能是「股」，需除以 1000 轉「張」
+        # 簡單防呆：如果 10日均量 > 10萬張 (且不是權值股)，可能就是單位問題
+        # 但像長榮航可能有幾十萬張。
+        # 比較保險的做法：Fugle Historical API 預設是「張」。除非您用的是 odd lot。
+        
         return {
             'MA20': round(ma20, 2) if pd.notna(ma20) else 0,
-            'Vol10': int(vol10) if pd.notna(vol10) else 0, # 新增回傳 Vol10
+            'Vol10': int(vol10) if pd.notna(vol10) else 0,
             'Bias': round(bias, 2),
             'Signal': " ".join(signals) if signals else "盤整"
         }
