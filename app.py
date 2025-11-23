@@ -32,7 +32,7 @@ with st.sidebar:
     
     # 1. 更新股價
     if st.button("🔄 更新即時股價 (Fugle)", use_container_width=True):
-            if not df_raw.empty:
+        if not df_raw.empty:
             # 找出庫存股
             temp_fifo = logic.calculate_fifo_report(df_raw)
             if not temp_fifo.empty:
