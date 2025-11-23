@@ -2,7 +2,7 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-23: [Update] 整合動能監測；新增「預估量」、「量比」欄位；使用 mp_table 查表
+# 2025-11-23: [Update] 新增「除錯模式」，顯示歷史K線末3筆資料以驗證 Vol10
 # ==============================================================================
 
 import streamlit as st
@@ -17,11 +17,11 @@ import market_data
 st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
+# ... (前面 1. 資料準備 與 2. 側邊欄設定 保持不變，省略) ...
 # ==============================================================================
 # 1. 資料準備
 # ==============================================================================
 
-# 讀取庫存
 try:
     df_txn = database.load_data()
     df_fifo = logic.calculate_fifo_report(df_txn)
@@ -29,7 +29,6 @@ try:
 except:
     inventory_stocks = []
 
-# 讀取自選股
 try:
     df_watch = database.load_watchlist()
     if not df_watch.empty and '股票代號' in df_watch.columns:
@@ -46,7 +45,6 @@ except:
     groups = ["全部", "庫存持股"]
     df_watch = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
 
-# 讀取 mp_table (時間倍數表)
 try:
     df_mp = database.load_mp_table()
 except:
@@ -94,24 +92,26 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.info("此群組無股票可監控。")
         return
 
-    # 2. 抓取資料 (即時報價 + 技術指標)
+    # 2. 抓取資料
     try:
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
+        # 從 Session 讀取 TA 資料
         ta_data = st.session_state.get("ta_data", {})
     except Exception as e:
         st.error(f"資料抓取失敗: {e}")
         return
 
-    # 3. 取得當前時間與倍數 (使用台灣時間)
+    # 3. 取得當前時間與倍數
     tw_now = datetime.utcnow() + timedelta(hours=8)
     current_time_str = tw_now.strftime("%H:%M")
-    
-    # 查表取得 multiplier
     multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
 
     # 4. 組裝表格資料
     table_rows = []
     alerts = []
+    
+    # 用來收集 Debug 資訊
+    debug_list = []
 
     for symbol in target_stocks:
         quote = quotes.get(symbol, {})
@@ -119,12 +119,20 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         chg = quote.get('change_pct', 0)
         vol = quote.get('volume', 0)
         
-        # 取得 TA
+        # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0) # 10日均量
+        vol_10ma = ta.get('Vol10', 0)
+        
+        # 收集 Debug 資訊
+        if 'debug_info' in ta:
+            debug_list.append({
+                '股票代號': symbol,
+                '10日均量(Vol10)': vol_10ma,
+                '歷史資料(末3筆)': ta['debug_info']
+            })
         
         # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
@@ -133,7 +141,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         name = ""
         high_limit = 0
         low_limit = 0
-        
         watch_info = df_watch[df_watch['股票代號'] == symbol]
         if not watch_info.empty:
             name = watch_info.iloc[0]['股票名稱']
@@ -146,10 +153,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_map = database.get_stock_info_map()
             name = stock_map.get(symbol, symbol)
 
-        # 警示判斷
+        # 警示
         status_icon = ""
-        
-        # A. 價格警示
         if high_limit > 0 and price >= high_limit:
             alerts.append(f"🔴 **{name} ({symbol})** 突破目標價 {high_limit} (現價 {price})")
             status_icon += "🔴"
@@ -157,11 +162,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             alerts.append(f"📉 **{name} ({symbol})** 跌破支撐價 {low_limit} (現價 {price})")
             status_icon += "📉"
             
-        # B. 動能警示
         if vol_ratio > 2.0: status_icon += "🔥"
         elif vol_ratio > 1.5: status_icon += "🟢"
-            
-        # C. 技術警示
         if bias > 20: status_icon += "⚠️"
         
         table_rows.append({
@@ -187,7 +189,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
     if table_rows:
         df_display = pd.DataFrame(table_rows)
-        
         st.dataframe(
             df_display,
             column_config={
@@ -210,6 +211,13 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 current_ta.update(new_ta)
                 st.session_state["ta_data"] = current_ta
                 st.rerun()
+                
+        # --- [新增] 除錯資訊區塊 ---
+        with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
+            st.markdown("此處顯示 API 抓取到的**歷史 K 線末 3 筆資料**。請確認：")
+            st.markdown("1. 日期是否包含今天？(若有，Vol10 會被拉低)")
+            st.markdown("2. 成交量單位是否正確？(是 '張' 還是 '股')")
+            st.write(debug_list)
 
 # ==============================================================================
 # 4. 執行渲染
