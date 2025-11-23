@@ -2,12 +2,14 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-23: [Update] 修正格式顯示錯誤 (移除 sprintf)，改用 Python f-string 預先格式化
+# 2025-11-23 20:35:00: [Update] 10日均量改為千張(無條件進位)；調整欄位寬度(small/medium)
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
 import time
+import math # 新增 math 模組用於無條件進位
 from datetime import datetime, timedelta
 
 import database
@@ -122,7 +124,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         if 'debug_info' in ta:
             debug_list.append({
                 '股票代號': symbol,
-                '10日均量(Vol10)': vol_10ma,
+                '10日均量(原始)': vol_10ma,
                 '歷史資料(末3筆)': ta['debug_info']
             })
         
@@ -155,25 +157,27 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         elif vol_ratio > 1.5: status_icon += "🟢"
         if bias > 20: status_icon += "⚠️"
         
-        # 格式化處理 (轉為字串，避免 Streamlit NumberColumn 格式錯誤)
-        # 現價：移除 $，千分位，兩位小數
+        # --- 格式化處理 ---
+        
         price_str = f"{price:,.2f}"
         
-        # 漲跌幅：百分比
-        # Fugle API 若回傳 0.055 -> 5.50%
-        chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%" # 簡易判斷 API 格式
+        # 漲跌幅
+        chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
 
-        # 成交量：千分位
+        # 成交量
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
-        vol_10ma_str = f"{int(vol_10ma):,}"
+        
+        # 10MA 量：除以 1000 並無條件進位 (轉為張數)
+        vol_10ma_lots = math.ceil(vol_10ma / 1000) if vol_10ma else 0
+        vol_10ma_str = f"{vol_10ma_lots:,}"
 
         table_rows.append({
             "代號": symbol,
             "名稱": name,
-            "現價": price_str,   # 使用格式化後的字串
-            "漲跌幅": chg_str,   # 使用格式化後的字串
-            "成交量": vol_str,   # 使用格式化後的字串
+            "現價": price_str,
+            "漲跌幅": chg_str,
+            "成交量": vol_str,
             "預估量": est_vol_str,
             "10日均量": vol_10ma_str,
             "量比": f"{vol_ratio:.2f}",
@@ -191,9 +195,22 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     if table_rows:
         df_display = pd.DataFrame(table_rows)
         
-        # 因為都轉成字串了，這裡直接顯示即可，不需要 NumberColumn 的 format
+        # 使用 column_config 控制寬度
         st.dataframe(
             df_display,
+            column_config={
+                "代號": st.column_config.TextColumn("代號", width="small"),
+                "名稱": st.column_config.TextColumn("名稱", width="small"),
+                "現價": st.column_config.TextColumn("現價", width="small"),
+                "漲跌幅": st.column_config.TextColumn("漲跌幅", width="small"),
+                "成交量": st.column_config.TextColumn("成交量", width="small"),
+                "預估量": st.column_config.TextColumn("預估量", width="small"),
+                "10日均量": st.column_config.TextColumn("10日均量", width="small"),
+                "量比": st.column_config.TextColumn("量比", width="small"),
+                "月線乖離率": st.column_config.TextColumn("月線乖離率", width="small"),
+                "技術訊號": st.column_config.TextColumn("技術訊號", width="medium"),
+                "警示": st.column_config.TextColumn("警示", width="small"),
+            },
             use_container_width=True,
             hide_index=True
         )
@@ -207,9 +224,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 st.rerun()
                 
         with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
-            st.markdown("此處顯示 API 抓取到的**歷史 K 線末 3 筆資料**。請確認：")
-            st.markdown("1. 日期是否包含今天？(若有，Vol10 會被拉低)")
-            st.markdown("2. 成交量單位是否正確？(是 '張' 還是 '股')")
+            st.markdown("API 原始資料 (單位: 股，上方表格已轉為張):")
             st.write(debug_list)
 
 # ==============================================================================
