@@ -1,3 +1,10 @@
+# ==============================================================================
+# 檔案名稱: database.py
+# 
+# 修改歷程:
+# 2025-11-23: [Update] 新增 load_mp_table 函式，讀取盤中量能倍數表
+# ==============================================================================
+
 import streamlit as st
 import pandas as pd
 import gspread
@@ -9,7 +16,8 @@ SHEET_NAME = '交易紀錄'
 INDEX_SHEET_NAME = 'INDEX'
 ACCOUNT_SHEET_NAME = '交割帳戶設定'
 HISTORY_SHEET_NAME = '資產歷史紀錄'
-WATCHLIST_SHEET_NAME = '自選股清單' # 新增
+WATCHLIST_SHEET_NAME = '自選股清單'
+MP_TABLE_SHEET_NAME = 'mp_table' # 新增
 
 # --- 連線核心 ---
 @st.cache_resource
@@ -32,7 +40,6 @@ def get_worksheet(sheet_name):
         sheet = client.open_by_url(sheet_url)
         return sheet.worksheet(sheet_name)
     except Exception as e:
-        # 改為 print 警告，避免因為找不到某個新 sheet 就讓整個 app 當掉
         print(f"無法開啟工作表 '{sheet_name}': {e}")
         return None
 
@@ -122,10 +129,9 @@ def save_asset_history(date_str, total_assets, total_cash, total_stock):
     except Exception as e:
         ws.append_row(row_data)
 
-# --- [新增] 讀取自選股清單 ---
-@st.cache_data(ttl=600) # 快取 10 分鐘，避免頻繁讀取 Sheet
+# --- 讀取自選股清單 ---
+@st.cache_data(ttl=600) 
 def load_watchlist():
-    """讀取自選股設定"""
     ws = get_worksheet(WATCHLIST_SHEET_NAME)
     if not ws: return pd.DataFrame()
     try:
@@ -133,4 +139,17 @@ def load_watchlist():
         return pd.DataFrame(data)
     except Exception as e:
         print(f"Warning: 讀取自選股失敗: {e}")
+        return pd.DataFrame()
+
+# --- [新增] 讀取量能倍數表 (mp_table) ---
+@st.cache_data(ttl=3600) # 設定較長快取，因為這張表很少變動
+def load_mp_table():
+    ws = get_worksheet(MP_TABLE_SHEET_NAME)
+    if not ws: return pd.DataFrame()
+    try:
+        data = ws.get_all_records()
+        # 預期欄位: "時間點迄 (HH:MM)", "量能倍數"
+        return pd.DataFrame(data)
+    except Exception as e:
+        print(f"Warning: 讀取 mp_table 失敗: {e}")
         return pd.DataFrame()
