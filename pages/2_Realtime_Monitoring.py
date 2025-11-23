@@ -2,6 +2,7 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
 # 2025-11-23: [Update] 新增「除錯模式」，顯示歷史K線末3筆資料以驗證 Vol10
 # ==============================================================================
 
@@ -17,11 +18,11 @@ import market_data
 st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
-# ... (前面 1. 資料準備 與 2. 側邊欄設定 保持不變，省略) ...
 # ==============================================================================
 # 1. 資料準備
 # ==============================================================================
 
+# 讀取庫存
 try:
     df_txn = database.load_data()
     df_fifo = logic.calculate_fifo_report(df_txn)
@@ -29,6 +30,7 @@ try:
 except:
     inventory_stocks = []
 
+# 讀取自選股
 try:
     df_watch = database.load_watchlist()
     if not df_watch.empty and '股票代號' in df_watch.columns:
@@ -117,14 +119,14 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         quote = quotes.get(symbol, {})
         price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0)
+        vol = quote.get('volume', 0) # 盤中量 (張)
         
         # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0)
+        vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
         
         # 收集 Debug 資訊
         if 'debug_info' in ta:
@@ -170,7 +172,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             "代號": symbol,
             "名稱": name,
             "現價": price,
-            "漲跌幅": chg / 100,
+            "漲跌幅": chg, # 這裡直接給 API 的值 (例如 0.05)，Streamlit 會乘 100 顯示
             "成交量": vol,
             "預估量": est_vol,
             "10日均量": int(vol_10ma),
@@ -193,10 +195,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             df_display,
             column_config={
                 "漲跌幅": st.column_config.NumberColumn("漲跌幅", format="%.2f%%"),
-                "現價": st.column_config.NumberColumn("現價", format="$%.2f"),
-                "成交量": st.column_config.NumberColumn("現量", format="%d"),
-                "預估量": st.column_config.NumberColumn("預估量", format="%d"),
-                "10日均量": st.column_config.NumberColumn("10MA量", format="%d"),
+                "現價": st.column_config.NumberColumn("現價", format="%,.2f"), # 千分位 + 2位小數
+                "成交量": st.column_config.NumberColumn("現量", format="%,d"), # 千分位
+                "預估量": st.column_config.NumberColumn("預估量", format="%,d"), # 千分位
+                "10日均量": st.column_config.NumberColumn("10MA量", format="%,d"), # 千分位
                 "量比": st.column_config.NumberColumn("量比", format="%.2f")
             },
             use_container_width=True,

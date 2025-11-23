@@ -2,7 +2,9 @@
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
 # 2025-11-23: [Update] get_technical_analysis 增加回傳 debug_info (歷史資料末3筆)
+# 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
 # ==============================================================================
 
 import streamlit as st
@@ -11,7 +13,6 @@ import time
 import pandas as pd
 from datetime import datetime, timedelta
 
-# ... (前面的 get_price_from_fugle, get_realtime_prices, get_detailed_quote, get_batch_detailed_quotes 保持不變) ...
 def get_price_from_fugle(symbol, api_key):
     """單純取得價格"""
     url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
@@ -109,10 +110,9 @@ def get_technical_analysis(symbol, api_key):
         df = df.sort_values('date')
         
         # --- 準備 Debug 資訊 ---
-        # 抓取最後 3 筆原始資料 (包含日期、收盤價、量)
         last_3_rows = df.tail(3)[['date', 'close', 'volume']].copy()
         last_3_rows['date'] = last_3_rows['date'].dt.strftime('%Y-%m-%d')
-        debug_info = last_3_rows.to_dict('records') # 轉成 list of dict 方便前端顯示
+        debug_info = last_3_rows.to_dict('records') 
         # ---------------------
 
         # 1. 排除今日資料
@@ -139,7 +139,7 @@ def get_technical_analysis(symbol, api_key):
         
         signals = []
         if pd.notna(ma20):
-            if price < ma20: signals.append("📉破月線") # 這裡用的是昨收價比對，僅供參考
+            if price < ma20: signals.append("📉破月線") 
             elif price > ma20: signals.append("🆗站上月線")
         if pd.notna(ma5) and ma5 > ma10 > ma20 > ma60: signals.append("🔥多頭排列")
         
@@ -152,7 +152,7 @@ def get_technical_analysis(symbol, api_key):
             'Vol10': int(vol10) if pd.notna(vol10) else 0,
             'Bias': round(bias, 2),
             'Signal': " ".join(signals) if signals else "盤整",
-            'debug_info': debug_info # 將歷史資料傳出去
+            'debug_info': debug_info
         }
     except Exception as e:
         return {'Signal': 'Error', 'MA20': 0, 'Vol10': 0, 'debug_info': str(e)}
