@@ -7,6 +7,13 @@ import database
 import logic
 import market_data
 
+# ==============================================================================
+# 檔案名稱: pages/2_Realtime_Monitoring.py
+# 
+# 修改歷程:
+# 2025-11-23: [Update] 欄位更名「月線乖離率」；調整漲跌幅格式；說明警示 Emoji
+# ==============================================================================
+
 st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
@@ -52,6 +59,14 @@ with st.sidebar:
     
     auto_refresh = st.toggle("啟用自動刷新 (30秒)", value=False)
     st.caption("⚠️ 注意：頻繁刷新會消耗 API 額度")
+    
+    st.divider()
+    st.markdown("### 💡 警示圖示說明")
+    st.markdown("""
+    - 🔥 **突破**: 現價 >= 警示價(高)
+    - 📉 **跌破**: 現價 <= 警示價(低)
+    - ⚠️ **乖離**: 月線乖離率 > 20%
+    """)
 
 # ==============================================================================
 # 3. 核心監控邏輯 (Fragment)
@@ -81,15 +96,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch):
         return
 
     # 2. 抓取資料 (即時報價 + 技術指標)
-    # 為了效能，這裡不顯示 spinner
     try:
-        # 若 session 中沒有 TA 資料，或是手動強制更新時才抓 TA (因為 TA 很慢)
-        # 這裡簡化策略：每次刷新只抓報價，TA 資料沿用 Session (需在首頁或手動按鈕更新)
-        # 或者：我們只抓報價，TA 欄位顯示「需更新」
-        
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
-        
-        # 嘗試從 session 取得 TA 資料 (由首頁更新)，若無則不顯示或顯示舊的
         ta_data = st.session_state.get("ta_data", {})
         
     except Exception as e:
@@ -126,14 +134,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch):
             try: low_limit = float(watch_info.iloc[0]['警示價_低'])
             except: low_limit = 0
         
-        # 若自選沒名稱，找庫存名稱，再沒有就找 map
         if not name:
-            # 嘗試從庫存找
-            if symbol in inventory_list:
-                # 這裡簡化，直接用 database map
-                pass
+            if symbol in inventory_list: pass
         
-        # 若還是沒名稱，從 mapping 找
         if not name:
             stock_map = database.get_stock_info_map()
             name = stock_map.get(symbol, symbol)
@@ -147,17 +150,16 @@ def render_monitor_table(selected_group, inventory_list, df_watch):
             alerts.append(f"🟢 **{name} ({symbol})** 跌破支撐價 {low_limit} (現價 {price})")
             status_icon += "📉"
             
-        # 乖離率警示
-        if bias > 20: status_icon += "⚠️乖離過大"
+        if bias > 20: status_icon += "⚠️"
         
         table_rows.append({
             "代號": symbol,
             "名稱": name,
             "現價": price,
-            "漲跌幅": chg / 100, # format 需要小數
+            "漲跌幅": chg / 100, # 維持除以100 (0.1 = 10%)
             "成交量": vol,
             "技術訊號": signal,
-            "乖離率": f"{bias}%",
+            "月線乖離率": f"{bias}%", # 修改欄位名稱
             "月線": ma20,
             "警示": status_icon
         })
@@ -176,7 +178,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch):
             column_config={
                 "漲跌幅": st.column_config.NumberColumn(
                     "漲跌幅",
-                    format="%.2f%%",
+                    format="%.2f%%", # 顯示兩位小數 (如 10.00%)
                 ),
                 "現價": st.column_config.NumberColumn(
                     "現價",
@@ -193,11 +195,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch):
         
         st.caption(f"最後更新: {datetime.now().strftime('%H:%M:%S')}")
         
-        # 手動更新 TA 按鈕 (放在表格下方)
         if st.button("🔄 更新此清單技術指標 (耗時)"):
             with st.spinner("計算技術指標中..."):
                 new_ta = market_data.get_batch_technical_analysis(target_stocks)
-                # 更新 session
                 current_ta = st.session_state.get("ta_data", {})
                 current_ta.update(new_ta)
                 st.session_state["ta_data"] = current_ta
