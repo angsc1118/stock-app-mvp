@@ -81,23 +81,41 @@ def get_account_settings():
 def load_data():
     try:
         ws = get_worksheet(SHEET_NAME)
+        # 使用 expected_headers 可以避免 header 錯誤，但最好還是清理 Sheet
         data = ws.get_all_records()
         return pd.DataFrame(data)
     except Exception as e:
         st.error(f"讀取交易紀錄失敗: {e}")
+        # 回傳空 DataFrame 以避免程式崩潰
         return pd.DataFrame()
 
-# --- 儲存交易 ---
+# --- [關鍵修改] 儲存交易 (移除多餘欄位) ---
 def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
+    
     fees = logic.calculate_fees(qty, price, action, discount, stock_id)
     txn_id = logic.generate_txn_id()
+    
+    # 依照您最新的簡化欄位順序排列
+    # 請確認 Google Sheet 的欄位順序與此一致
     row_data = [
-        txn_id, str(date_val), str(stock_id), stock_name, action, qty, price,
-        fees['commission'], fees['tax'], fees['other_fees'], 
-        fees['gross_amount'], fees['total_fees'], fees['net_cash_flow'],
-        False, account, notes
+        txn_id,                 # 交易ID
+        str(date_val),          # 交易日期
+        str(stock_id),          # 股票代號
+        stock_name,             # 股票名稱
+        action,                 # 交易類別
+        qty,                    # 股數
+        price,                  # 單價
+        fees['commission'],     # 手續費
+        fees['tax'],            # 交易稅
+        fees['other_fees'],     # 其他費用
+        fees['gross_amount'],   # 成交總金額
+        fees['total_fees'],     # 總費用
+        fees['net_cash_flow'],  # 淨收付金額
+        account,                # 交易帳戶
+        notes                   # 備註 (建議保留)
     ]
+    
     ws.append_row(row_data)
     st.cache_data.clear()
 
@@ -110,18 +128,11 @@ def load_asset_history():
     except Exception as e:
         return pd.DataFrame()
 
-# --- [修改] 寫入資產歷史紀錄 (含覆蓋邏輯與格式化) ---
+# --- 寫入資產歷史紀錄 ---
 def save_asset_history(date_str, total_assets, total_cash, total_stock):
-    """
-    寫入一筆資產紀錄
-    如果當天已存在紀錄，則更新該行；否則新增。
-    數值會格式化為 "1,234,567" 字串。
-    """
     ws = get_worksheet(HISTORY_SHEET_NAME)
     
-    # 1. 準備寫入資料 (加上逗號格式)
-    # 注意：這裡將數字轉為字串儲存，但 load_asset_history 讀取後
-    # 因為 logic.py 的 helper 函式會處理逗號，所以不會有問題
+    # 寫入格式化後的字串
     row_data = [
         str(date_str),
         f"{total_assets:,}",
@@ -130,25 +141,16 @@ def save_asset_history(date_str, total_assets, total_cash, total_stock):
     ]
     
     try:
-        # 2. 檢查日期是否已存在 (讀取第一欄：日期)
-        # col_values(1) 會回傳整欄資料列表，例如 ['日期', '2025-11-20', '2025-11-21']
-        dates = ws.col_values(1)
-        
-        if str(date_str) in dates:
-            # 3. 若存在 -> 找到列號並更新 (dates 列表是 0-based，且包含標題，所以要小心計算)
-            # gspread 的行號是 1-based
-            row_idx = dates.index(str(date_str)) + 1
-            
-            # 更新該列 (A{row}:D{row})
-            # 這裡使用 range 寫法確保覆蓋整列
+        # 檢查日期是否已存在，若存在則覆蓋
+        col_dates = ws.col_values(1) # 取得第一欄的所有日期
+        if str(date_str) in col_dates:
+            # 找到列號 (gspread 是 1-based)
+            row_idx = col_dates.index(str(date_str)) + 1
             cell_range = f"A{row_idx}:D{row_idx}"
             ws.update(range_name=cell_range, values=[row_data])
-            
         else:
-            # 4. 若不存在 -> 新增
             ws.append_row(row_data)
             
     except Exception as e:
-        # 若讀取日期失敗或其他錯誤，退回到直接新增 (保險起見)
         print(f"Update history failed, fallback to append: {e}")
         ws.append_row(row_data)
