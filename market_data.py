@@ -1,7 +1,10 @@
+--- START OF FILE market_data.py ---
+
 # ==============================================================================
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
+# 2025-11-24 15:30:00: [Fix] 修正 get_technical_analysis 時區問題 (改用 UTC+8)，避免誤刪昨日K線
 # 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
 # 2025-11-23: [Update] get_technical_analysis 增加回傳 debug_info (歷史資料末3筆)
 # 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
@@ -71,7 +74,7 @@ def get_detailed_quote(symbol, api_key):
         return {
             "price": float(last_price),
             "change_pct": float(change_percent),
-            "volume": int(volume),
+            "volume": int(volume), # 單位: 股 (Shares)
             "last_updated": datetime.now().strftime('%H:%M:%S')
         }
     except: return None
@@ -90,10 +93,12 @@ def get_batch_detailed_quotes(stock_list):
 def get_technical_analysis(symbol, api_key):
     """
     抓取歷史資料並計算技術指標
-    修正：排除今日盤中資料計算均量
+    修正：排除今日盤中資料計算均量 (使用 UTC+8 判斷日期)
     """
-    to_date = datetime.now().strftime('%Y-%m-%d')
-    from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
+    # 設定台灣時間
+    tw_now = datetime.utcnow() + timedelta(hours=8)
+    to_date = tw_now.strftime('%Y-%m-%d')
+    from_date = (tw_now - timedelta(days=120)).strftime('%Y-%m-%d')
     
     url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{symbol}"
     params = {"from": from_date, "to": to_date, "fields": "open,high,low,close,volume"}
@@ -115,13 +120,13 @@ def get_technical_analysis(symbol, api_key):
         debug_info = last_3_rows.to_dict('records') 
         # ---------------------
 
-        # 1. 排除今日資料
-        today_str = datetime.now().strftime('%Y-%m-%d')
+        # 1. 排除今日資料 (使用台灣時間判斷)
+        today_str = tw_now.strftime('%Y-%m-%d')
         last_date_str = df.iloc[-1]['date'].strftime('%Y-%m-%d')
         
         df_calc = df.copy()
         if last_date_str == today_str:
-            df_calc = df.iloc[:-1] # 排除最後一筆
+            df_calc = df.iloc[:-1] # 排除最後一筆 (因為是今日盤中資料)
         
         # 2. 計算技術指標
         df_calc['MA5'] = df_calc['close'].rolling(window=5).mean()
@@ -149,7 +154,7 @@ def get_technical_analysis(symbol, api_key):
 
         return {
             'MA20': round(ma20, 2) if pd.notna(ma20) else 0,
-            'Vol10': int(vol10) if pd.notna(vol10) else 0,
+            'Vol10': int(vol10) if pd.notna(vol10) else 0, # 單位: 股 (Shares)
             'Bias': round(bias, 2),
             'Signal': " ".join(signals) if signals else "盤整",
             'debug_info': debug_info
