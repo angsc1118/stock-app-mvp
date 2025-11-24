@@ -2,6 +2,7 @@
 # 檔案名稱: pages/1_Account_Management.py
 # 
 # 修改歷程:
+# 2025-11-24 14:15:00: [Fix] 確保 Tab 2 的個股損益查詢功能正常顯示
 # 2025-11-23: [Update] 調整版面配置，將交易帳戶與交易日期分開顯示
 # ==============================================================================
 
@@ -18,10 +19,7 @@ import market_data
 st.set_page_config(page_title="帳務管理", layout="wide", page_icon="📝")
 st.title("📝 帳務管理中心")
 
-# ==============================================================================
-# 1. 資料讀取與初始化
-# ==============================================================================
-
+# ... (資料讀取、Session State 初始化、Callback 保持不變，省略以節省篇幅) ...
 try:
     stock_map = database.get_stock_info_map()
 except:
@@ -98,10 +96,7 @@ with st.sidebar:
     mode = st.radio("選擇功能", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
-        # [修改] 調整佈局：日期獨佔一行
         st.date_input("交易日期", key="txn_date")
-        
-        # [修改] 帳戶與類別放同一行 (或是獨佔一行也可，這裡示範獨佔一行更清楚)
         st.selectbox("交易帳戶", options=account_list, key="txn_account")
         
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
@@ -119,13 +114,11 @@ with st.sidebar:
                     st.session_state["txn_stock_name"] = found_name
                     st.rerun()
 
-        # 股票名稱欄位
         if is_cash_op:
             st.text_input("股票名稱", placeholder="(可留空)", key="txn_stock_name")
         else:
             st.text_input("股票名稱", placeholder="自動帶入", key="txn_stock_name")
 
-        # 股數與價格並排
         col3, col4 = st.columns(2)
         qty_label = "數量 (1)" if is_cash_op else "股數"
         price_label = "金額" if is_cash_op else "單價"
@@ -139,7 +132,6 @@ with st.sidebar:
         
     else:
         st.info("自動計算差額並產生修正交易")
-        # 校正模式下，帳戶選擇已經是獨佔一行，無需調整
         adj_account = st.selectbox("選擇校正帳戶", options=account_list)
         try:
             if not df_raw.empty:
@@ -188,11 +180,9 @@ with tab1:
         df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
         
         if not df_unrealized.empty:
-            # 技術指標
             df_unrealized['技術訊號'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('Signal', '-'))
             df_unrealized['月線(20MA)'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('MA20', 0))
 
-            # 虧損警示
             loss_threshold = -20.0
             danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold]
             if not danger_stocks.empty:
@@ -232,7 +222,7 @@ with tab1:
     else:
         st.warning("無交易紀錄。")
 
-# --- Tab 2: 獲利分析 ---
+# --- Tab 2: 獲利分析 (包含個股查詢) ---
 with tab2:
     if not df_raw.empty:
         df_realized_all = logic.calculate_realized_report(df_raw)
@@ -270,15 +260,27 @@ with tab2:
                     fig_m.update_layout(showlegend=False, xaxis_title=None, yaxis=dict(tickformat=".2s"))
                     st.plotly_chart(fig_m, use_container_width=True)
                 with g2:
+                    st.markdown("##### 🏆 個股貢獻度")
+                    all_stocks = df_view['股票'].unique()
+                    # [重要] 新增個股查詢功能
+                    sel_stocks = st.multiselect("🔍 查詢特定個股 (留空顯示 Top 8)", options=all_stocks)
                     stock_pnl = df_view.groupby('股票')['已實現損益'].sum().reset_index()
-                    if len(stock_pnl) > 16:
-                        stock_pnl = pd.concat([stock_pnl.nlargest(8,'已實現損益'), stock_pnl.nsmallest(8,'已實現損益')]).drop_duplicates()
+                    
+                    if sel_stocks:
+                        stock_pnl = stock_pnl[stock_pnl['股票'].isin(sel_stocks)]
+                        h = 400 + len(sel_stocks)*20
+                    else:
+                        h = 400
+                        if len(stock_pnl) > 16:
+                            stock_pnl = pd.concat([stock_pnl.nlargest(8,'已實現損益'), stock_pnl.nsmallest(8,'已實現損益')]).drop_duplicates()
+                    
                     stock_pnl = stock_pnl.sort_values('已實現損益', ascending=True)
                     stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
                     fig_s = px.bar(stock_pnl, y='股票', x='已實現損益', orientation='h', color='Color', color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
                     fig_s.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
-                    fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"))
+                    fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"), height=h)
                     st.plotly_chart(fig_s, use_container_width=True)
+
             else: st.info("無資料")
         else: st.info("尚無已實現損益。")
 
