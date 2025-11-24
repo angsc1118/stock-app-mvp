@@ -1,11 +1,10 @@
---- START OF FILE market_data.py ---
-
 # ==============================================================================
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-11-24 15:45:00: [Fix] 修正語法結構，確保時區處理與字典閉合正確
-# 2025-11-24 15:30:00: [Fix] 修正 get_technical_analysis 時區問題 (改用 UTC+8)
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
+# 2025-11-23: [Update] get_technical_analysis 增加回傳 debug_info (歷史資料末3筆)
+# 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
 # ==============================================================================
 
 import streamlit as st
@@ -72,7 +71,7 @@ def get_detailed_quote(symbol, api_key):
         return {
             "price": float(last_price),
             "change_pct": float(change_percent),
-            "volume": int(volume), # 單位: 股 (Shares)
+            "volume": int(volume),
             "last_updated": datetime.now().strftime('%H:%M:%S')
         }
     except: return None
@@ -87,15 +86,14 @@ def get_batch_detailed_quotes(stock_list):
         time.sleep(0.1)
     return results
 
+# --- [修改] 技術分析 (回傳 debug_info) ---
 def get_technical_analysis(symbol, api_key):
     """
     抓取歷史資料並計算技術指標
-    修正：排除今日盤中資料計算均量 (使用 UTC+8 判斷日期)
+    修正：排除今日盤中資料計算均量
     """
-    # 設定台灣時間
-    tw_now = datetime.utcnow() + timedelta(hours=8)
-    to_date = tw_now.strftime('%Y-%m-%d')
-    from_date = (tw_now - timedelta(days=120)).strftime('%Y-%m-%d')
+    to_date = datetime.now().strftime('%Y-%m-%d')
+    from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
     
     url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{symbol}"
     params = {"from": from_date, "to": to_date, "fields": "open,high,low,close,volume"}
@@ -117,13 +115,13 @@ def get_technical_analysis(symbol, api_key):
         debug_info = last_3_rows.to_dict('records') 
         # ---------------------
 
-        # 1. 排除今日資料 (使用台灣時間判斷)
-        today_str = tw_now.strftime('%Y-%m-%d')
+        # 1. 排除今日資料
+        today_str = datetime.now().strftime('%Y-%m-%d')
         last_date_str = df.iloc[-1]['date'].strftime('%Y-%m-%d')
         
         df_calc = df.copy()
         if last_date_str == today_str:
-            df_calc = df.iloc[:-1] # 排除最後一筆 (因為是今日盤中資料)
+            df_calc = df.iloc[:-1] # 排除最後一筆
         
         # 2. 計算技術指標
         df_calc['MA5'] = df_calc['close'].rolling(window=5).mean()
@@ -132,15 +130,11 @@ def get_technical_analysis(symbol, api_key):
         df_calc['MA60'] = df_calc['close'].rolling(window=60).mean()
         df_calc['Vol10'] = df_calc['volume'].rolling(window=10).mean()
         
-        if len(df_calc) < 1: 
-            return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
+        if len(df_calc) < 1: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
 
         last = df_calc.iloc[-1]
         price = last['close']
-        ma5 = last['MA5']
-        ma10 = last['MA10']
-        ma20 = last['MA20']
-        ma60 = last['MA60']
+        ma5, ma10, ma20, ma60 = last['MA5'], last['MA10'], last['MA20'], last['MA60']
         vol10 = last['Vol10']
         
         signals = []
@@ -155,7 +149,7 @@ def get_technical_analysis(symbol, api_key):
 
         return {
             'MA20': round(ma20, 2) if pd.notna(ma20) else 0,
-            'Vol10': int(vol10) if pd.notna(vol10) else 0, # 單位: 股 (Shares)
+            'Vol10': int(vol10) if pd.notna(vol10) else 0,
             'Bias': round(bias, 2),
             'Signal': " ".join(signals) if signals else "盤整",
             'debug_info': debug_info
