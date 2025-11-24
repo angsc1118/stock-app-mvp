@@ -2,8 +2,8 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-24 15:10:00: [Fix] 移動「更新技術指標」按鈕至側邊欄；修正量比 N/A 顯示
 # 2025-11-24 14:50:00: [Fix] 修正量比顯示問題；優化 Vol10 與量比的格式化邏輯
+# 2025-11-24 14:30:00: [Fix] 修正量比顯示問題；若無 Vol10 顯示提示；調整欄位寬度與格式
 # ==============================================================================
 
 import streamlit as st
@@ -62,35 +62,15 @@ with st.sidebar:
     auto_refresh = st.toggle("啟用自動刷新 (30秒)", value=False)
     st.caption("⚠️ 注意：頻繁刷新會消耗 API 額度")
     
-    # [新增] 將更新按鈕移到這裡
-    st.divider()
-    st.markdown("#### 📊 數據更新")
-    if st.button("🔄 更新技術指標 (含均量)", help="抓取歷史K線以計算 10日均量，這是計算量比的基礎"):
-        # 為了取得 target_stocks，我們需要先執行篩選邏輯，但這裡無法直接存取 render_monitor_table 內的變數
-        # 所以我們重新執行一次篩選邏輯
-        target_stocks = []
-        if selected_group == "全部":
-            watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
-            target_stocks = list(set(inventory_list + watch_list))
-        elif selected_group == "庫存持股":
-            target_stocks = inventory_list
-        else:
-            if not df_watch.empty:
-                target_stocks = df_watch[df_watch['群組'] == selected_group]['股票代號'].tolist()
-        
-        if target_stocks:
-            with st.spinner(f"正在更新 {len(target_stocks)} 檔股票的技術指標..."):
-                new_ta = market_data.get_batch_technical_analysis(target_stocks)
-                current_ta = st.session_state.get("ta_data", {})
-                current_ta.update(new_ta)
-                st.session_state["ta_data"] = current_ta
-                st.rerun()
-        else:
-            st.warning("目前清單無股票可更新。")
-
     st.divider()
     st.markdown("### 💡 警示圖示說明")
-    st.markdown("- 🔥 **爆量**: 量比 > 2.0\n- 🟢 **增量**: 量比 > 1.5\n- 🔴 **突破**: 現價 >= 高\n- 📉 **跌破**: 現價 <= 低\n- ⚠️ **乖離**: > 20%")
+    st.markdown("""
+    - 🔥 **爆量**: 量比 > 2.0
+    - 🟢 **增量**: 量比 > 1.5
+    - 🔴 **突破**: 現價 >= 高
+    - 📉 **跌破**: 現價 <= 低
+    - ⚠️ **乖離**: > 20%
+    """)
 
 # ==============================================================================
 # 3. 核心監控邏輯 (Fragment)
@@ -99,6 +79,7 @@ with st.sidebar:
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
+    # 1. 決定要監控的股票清單
     target_stocks = []
     if selected_group == "全部":
         watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
@@ -113,43 +94,57 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.info("此群組無股票可監控。")
         return
 
+    # 2. 抓取資料 (即時報價 + 技術指標)
     try:
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
+        # 從 Session 讀取 TA 資料
         ta_data = st.session_state.get("ta_data", {})
     except Exception as e:
         st.error(f"資料抓取失敗: {e}")
         return
 
+    # 3. 取得當前時間與倍數 (使用台灣時間)
     tw_now = datetime.utcnow() + timedelta(hours=8)
     current_time_str = tw_now.strftime("%H:%M")
+    
+    # 查表取得 multiplier
     multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
 
+    # 4. 組裝表格資料
     table_rows = []
     alerts = []
     debug_list = []
     
-    # 檢查 Vol10 狀況
-    has_valid_vol10 = False
+    # 檢查是否有 TA 資料 (Vol10)
+    # 如果 session 中沒有 ta_data，提示使用者更新
+    if not ta_data:
+        st.warning("⚠️ 尚未取得「10日均量」資料，量比無法計算。請點擊下方「🔄 更新技術指標」按鈕。")
 
     for symbol in target_stocks:
         quote = quotes.get(symbol, {})
         price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0)
+        vol = quote.get('volume', 0) # 盤中量 (張)
         
+        # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0)
+        vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
         
-        if vol_10ma > 0: has_valid_vol10 = True
-        
+        # 收集 Debug 資訊
         if 'debug_info' in ta:
-            debug_list.append({'代號': symbol, 'Vol10': vol_10ma, 'History': ta['debug_info']})
+            debug_list.append({
+                '股票代號': symbol,
+                '10日均量(Vol10)': vol_10ma,
+                '歷史資料(末3筆)': ta['debug_info']
+            })
         
+        # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
+        # 取得基本資料
         name = ""
         high_limit = 0
         low_limit = 0
@@ -165,7 +160,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_map = database.get_stock_info_map()
             name = stock_map.get(symbol, symbol)
 
+        # 警示判斷
         status_icon = ""
+        
+        # A. 價格警示
         if high_limit > 0 and price >= high_limit:
             alerts.append(f"🔴 **{name} ({symbol})** 突破目標價 {high_limit} (現價 {price})")
             status_icon += "🔴"
@@ -173,40 +171,59 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             alerts.append(f"📉 **{name} ({symbol})** 跌破支撐價 {low_limit} (現價 {price})")
             status_icon += "📉"
             
+        # B. 動能警示
         if vol_ratio > 2.0: status_icon += "🔥"
         elif vol_ratio > 1.5: status_icon += "🟢"
+            
+        # C. 技術警示
         if bias > 20: status_icon += "⚠️"
         
+        # 格式化處理
         price_str = f"{price:,.2f}"
+        
+        # 漲跌幅
         chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
+
+        # 成交量
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
         
+        # 10MA 量顯示邏輯
         if vol_10ma > 0:
+            # math.ceil 無條件進位
             vol_10ma_lots = math.ceil(vol_10ma / 1000)
             vol_10ma_str = f"{vol_10ma_lots:,}"
+            
+            # 量比顯示邏輯
             vol_ratio_str = f"{vol_ratio:.2f}"
         else:
-            vol_10ma_str = "需更新"
-            vol_ratio_str = "-"
+            vol_10ma_str = "N/A"
+            vol_ratio_str = "-" # 無法計算
 
         table_rows.append({
-            "代號": symbol, "名稱": name, "現價": price_str, "漲跌幅": chg_str,
-            "成交量": vol_str, "預估量": est_vol_str, "10日均量": vol_10ma_str,
-            "量比": vol_ratio_str, "月線乖離率": f"{bias:.2f}%",
-            "技術訊號": signal, "警示": status_icon
+            "代號": symbol,
+            "名稱": name,
+            "現價": price_str,   # 使用格式化後的字串
+            "漲跌幅": chg_str,   # 使用格式化後的字串
+            "成交量": vol_str,   # 使用格式化後的字串
+            "預估量": est_vol_str,
+            "10日均量": vol_10ma_str,
+            "量比": vol_ratio_str,
+            "月線乖離率": f"{bias:.2f}%",
+            "技術訊號": signal,
+            "警示": status_icon
         })
-    
-    if not has_valid_vol10 and target_stocks:
-        st.warning("⚠️ 尚未取得均量資料，請點擊側邊欄的「🔄 更新技術指標」按鈕。")
 
+    # 5. 顯示內容
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 預估倍數: {multiplier}")
 
     if alerts:
-        for alert in alerts: st.error(alert)
+        for alert in alerts:
+            st.error(alert)
     
     if table_rows:
         df_display = pd.DataFrame(table_rows)
+        
         st.dataframe(
             df_display,
             column_config={
@@ -225,8 +242,22 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             use_container_width=True,
             hide_index=True
         )
+        
+        # 手動更新 TA 按鈕
+        if st.button("🔄 更新技術指標 (均線/均量)"):
+            with st.spinner("計算技術指標中 (抓取歷史K線)..."):
+                new_ta = market_data.get_batch_technical_analysis(target_stocks)
+                # 更新 session
+                current_ta = st.session_state.get("ta_data", {})
+                current_ta.update(new_ta)
+                st.session_state["ta_data"] = current_ta
+                st.rerun()
                 
+        # 除錯資訊區塊
         with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
+            st.markdown("此處顯示 API 抓取到的**歷史 K 線末 3 筆資料**。請確認：")
+            st.markdown("1. 日期是否包含今天？(若有，Vol10 會被拉低)")
+            st.markdown("2. 成交量單位是否正確？(是 '張' 還是 '股')")
             st.write(debug_list)
 
 # ==============================================================================
