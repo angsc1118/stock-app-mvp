@@ -2,14 +2,13 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-23 20:35:00: [Update] 10日均量改為千張(無條件進位)；調整欄位寬度(small/medium)
-# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位
+# 2025-11-24 13:00:00: [Fix] 確保 TA 資料正確讀取；格式化量比顯示
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
 import time
-import math # 新增 math 模組用於無條件進位
+import math
 from datetime import datetime, timedelta
 
 import database
@@ -19,10 +18,7 @@ import market_data
 st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
-# ==============================================================================
-# 1. 資料準備
-# ==============================================================================
-
+# ... (資料準備部分保持不變) ...
 # 讀取庫存
 try:
     df_txn = database.load_data()
@@ -31,14 +27,12 @@ try:
 except:
     inventory_stocks = []
 
-# 讀取自選股
 try:
     df_watch = database.load_watchlist()
     if not df_watch.empty and '股票代號' in df_watch.columns:
         df_watch['股票代號'] = df_watch['股票代號'].astype(str).str.strip()
         groups = ["全部", "庫存持股"]
-        if '群組' in df_watch.columns:
-            groups += df_watch['群組'].unique().tolist()
+        if '群組' in df_watch.columns: groups += df_watch['群組'].unique().tolist()
         groups = list(set(groups))
         groups.sort()
     else:
@@ -53,33 +47,18 @@ try:
 except:
     df_mp = pd.DataFrame()
 
-# ==============================================================================
-# 2. 側邊欄設定
-# ==============================================================================
+# 側邊欄
 with st.sidebar:
     st.header("⚙️ 監控設定")
     selected_group = st.selectbox("選擇監控群組", groups)
-    
     auto_refresh = st.toggle("啟用自動刷新 (30秒)", value=False)
     st.caption("⚠️ 注意：頻繁刷新會消耗 API 額度")
-    
     st.divider()
     st.markdown("### 💡 警示圖示說明")
-    st.markdown("""
-    - 🔥 **爆量**: 量比 > 2.0
-    - 🟢 **增量**: 量比 > 1.5
-    - 🔴 **突破**: 現價 >= 警示價(高)
-    - 📉 **跌破**: 現價 <= 警示價(低)
-    - ⚠️ **乖離**: 月線乖離率 > 20%
-    """)
-
-# ==============================================================================
-# 3. 核心監控邏輯 (Fragment)
-# ==============================================================================
+    st.markdown("- 🔥 **爆量**: 量比 > 2.0\n- 🟢 **增量**: 量比 > 1.5\n- 🔴 **突破**: 現價 >= 高\n- 📉 **跌破**: 現價 <= 低\n- ⚠️ **乖離**: > 20%")
 
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
-    
     target_stocks = []
     if selected_group == "全部":
         watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
@@ -108,6 +87,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     table_rows = []
     alerts = []
     debug_list = []
+    
+    # 檢查是否有 TA 資料
+    if not ta_data:
+        st.warning("⚠️ 目前尚未取得「10日均量」資料，量比將無法計算。請點擊下方「🔄 更新技術指標」按鈕。")
 
     for symbol in target_stocks:
         quote = quotes.get(symbol, {})
@@ -122,11 +105,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         vol_10ma = ta.get('Vol10', 0)
         
         if 'debug_info' in ta:
-            debug_list.append({
-                '股票代號': symbol,
-                '10日均量(原始)': vol_10ma,
-                '歷史資料(末3筆)': ta['debug_info']
-            })
+            debug_list.append({'代號': symbol, 'Vol10': vol_10ma, 'History': ta['debug_info']})
         
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
@@ -157,45 +136,27 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         elif vol_ratio > 1.5: status_icon += "🟢"
         if bias > 20: status_icon += "⚠️"
         
-        # --- 格式化處理 ---
-        
         price_str = f"{price:,.2f}"
-        
-        # 漲跌幅
         chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
-
-        # 成交量
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
-        
-        # 10MA 量：除以 1000 並無條件進位 (轉為張數)
         vol_10ma_lots = math.ceil(vol_10ma / 1000) if vol_10ma else 0
         vol_10ma_str = f"{vol_10ma_lots:,}"
 
         table_rows.append({
-            "代號": symbol,
-            "名稱": name,
-            "現價": price_str,
-            "漲跌幅": chg_str,
-            "成交量": vol_str,
-            "預估量": est_vol_str,
-            "10日均量": vol_10ma_str,
-            "量比": f"{vol_ratio:.2f}",
-            "月線乖離率": f"{bias:.2f}%",
-            "技術訊號": signal,
-            "警示": status_icon
+            "代號": symbol, "名稱": name, "現價": price_str, "漲跌幅": chg_str,
+            "成交量": vol_str, "預估量": est_vol_str, "10日均量": vol_10ma_str,
+            "量比": f"{vol_ratio:.2f}", "月線乖離率": f"{bias:.2f}%",
+            "技術訊號": signal, "警示": status_icon
         })
 
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 預估倍數: {multiplier}")
 
     if alerts:
-        for alert in alerts:
-            st.error(alert)
+        for alert in alerts: st.error(alert)
     
     if table_rows:
         df_display = pd.DataFrame(table_rows)
-        
-        # 使用 column_config 控制寬度
         st.dataframe(
             df_display,
             column_config={
@@ -223,13 +184,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 st.session_state["ta_data"] = current_ta
                 st.rerun()
                 
-        with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
-            st.markdown("API 原始資料 (單位: 股，上方表格已轉為張):")
+        with st.expander("🛠️ 技術指標除錯資訊"):
             st.write(debug_list)
-
-# ==============================================================================
-# 4. 執行渲染
-# ==============================================================================
 
 if not groups:
     st.warning("無法讀取「自選股清單」或「交易紀錄」。請確認 Google Sheet 設定。")
