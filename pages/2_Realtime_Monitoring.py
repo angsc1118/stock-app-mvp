@@ -2,6 +2,7 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
+# 2025-11-24 14:15:00: [Fix] 修正量比顯示異常；加強 Vol10 數據檢查
 # 2025-11-24 13:00:00: [Fix] 確保 TA 資料正確讀取；格式化量比顯示
 # ==============================================================================
 
@@ -88,8 +89,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     alerts = []
     debug_list = []
     
-    # 檢查是否有 TA 資料
-    if not ta_data:
+    # 檢查是否有 TA 資料，若無顯示警告
+    has_ta_data = any(ta_data.values())
+    if not has_ta_data:
         st.warning("⚠️ 目前尚未取得「10日均量」資料，量比將無法計算。請點擊下方「🔄 更新技術指標」按鈕。")
 
     for symbol in target_stocks:
@@ -140,13 +142,21 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
-        vol_10ma_lots = math.ceil(vol_10ma / 1000) if vol_10ma else 0
-        vol_10ma_str = f"{vol_10ma_lots:,}"
+        
+        # 處理 10MA 顯示：如果沒有資料顯示 N/A
+        if vol_10ma > 0:
+            vol_10ma_lots = math.ceil(vol_10ma / 1000)
+            vol_10ma_str = f"{vol_10ma_lots:,}"
+        else:
+            vol_10ma_str = "N/A"
+
+        # 處理量比顯示
+        vol_ratio_str = f"{vol_ratio:.2f}" if vol_ratio > 0 else "-"
 
         table_rows.append({
             "代號": symbol, "名稱": name, "現價": price_str, "漲跌幅": chg_str,
             "成交量": vol_str, "預估量": est_vol_str, "10日均量": vol_10ma_str,
-            "量比": f"{vol_ratio:.2f}", "月線乖離率": f"{bias:.2f}%",
+            "量比": vol_ratio_str, "月線乖離率": f"{bias:.2f}%",
             "技術訊號": signal, "警示": status_icon
         })
 
@@ -164,7 +174,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 "名稱": st.column_config.TextColumn("名稱", width="small"),
                 "現價": st.column_config.TextColumn("現價", width="small"),
                 "漲跌幅": st.column_config.TextColumn("漲跌幅", width="small"),
-                "成交量": st.column_config.TextColumn("成交量", width="small"),
+                "成交量": st.column_config.TextColumn("現量", width="small"),
                 "預估量": st.column_config.TextColumn("預估量", width="small"),
                 "10日均量": st.column_config.TextColumn("10日均量", width="small"),
                 "量比": st.column_config.TextColumn("量比", width="small"),
