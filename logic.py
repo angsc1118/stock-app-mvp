@@ -2,9 +2,8 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
+# 2025-11-24 09:05:00: [Fix] 修正 calculate_account_balances 字串串接問題 (強制移除逗號再轉數值)
 # 2025-11-24 09:15:00: [Fix] 修正 FIFO 浮點數誤差問題 (增加 epsilon 閾值過濾極小庫存)
-# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
-# 2025-11-23: [Fix] 補全所有核心函式 (FIFO, 損益, 餘額, 動能)，修正 AttributeError
 # ==============================================================================
 
 import pandas as pd
@@ -299,6 +298,7 @@ def calculate_account_balances(df):
 
     # 2. 清洗數據：
     df_calc[col_account] = df_calc[col_account].astype(str).str.strip()
+    # [修正重點] 強制轉字串 -> 移除逗號与錢字號 -> 再轉數值
     df_calc[col_net_cash] = df_calc[col_net_cash].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
     df_calc[col_net_cash] = pd.to_numeric(df_calc[col_net_cash], errors='coerce').fillna(0)
     
