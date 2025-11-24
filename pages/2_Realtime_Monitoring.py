@@ -4,9 +4,8 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
-# 2025-11-24 15:30:00: [Fix] 增加自動補抓 TA 資料機制；統一顯示單位為「張」；修復量比顯示
-# 2025-11-24 14:50:00: [Fix] 修正量比顯示問題；優化 Vol10 與量比的格式化邏輯
-# 2025-11-24 14:30:00: [Fix] 修正量比顯示問題；若無 Vol10 顯示提示；調整欄位寬度與格式
+# 2025-11-24 15:45:00: [Fix] 修正 SyntaxError，簡化 decorator 寫法，確保括號閉合
+# 2025-11-24 15:30:00: [Fix] 增加自動補抓 TA 資料機制；統一顯示單位為「張」
 # ==============================================================================
 
 import streamlit as st
@@ -79,7 +78,10 @@ with st.sidebar:
 # 3. 核心監控邏輯 (Fragment)
 # ==============================================================================
 
-@st.fragment(run_every=30 if auto_refresh else None)
+# 為了避免語法解析錯誤，將參數提取出來
+run_interval = 30 if auto_refresh else None
+
+@st.fragment(run_every=run_interval)
 def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
     # 1. 決定要監控的股票清單
@@ -98,7 +100,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         return
 
     # --- [新增] 自動檢查並補抓 TA 資料 ---
-    # 如果 session 中沒有 ta_data，或者缺少目標股票的資料，就自動抓取一次
     if "ta_data" not in st.session_state: st.session_state["ta_data"] = {}
     current_ta = st.session_state["ta_data"]
     missing_stocks = [s for s in target_stocks if s not in current_ta]
@@ -193,7 +194,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         price_str = f"{price:,.2f}"
         chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
 
-        # 轉張數 (無條件進位或四捨五入皆可，這裡用 int 直接取整)
+        # 轉張數
         vol_lots = int(vol_shares / 1000)
         est_vol_lots = int(est_vol_shares / 1000)
         
@@ -207,16 +208,16 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             vol_ratio_str = f"{vol_ratio:.2f}"
         else:
             vol_10ma_str = "N/A"
-            vol_ratio_str = "-" # 無法計算
+            vol_ratio_str = "-"
 
         table_rows.append({
             "代號": symbol,
             "名稱": name,
             "現價": price_str,
             "漲跌幅": chg_str,
-            "成交量(張)": vol_str,      # 顯示張數
-            "預估量(張)": est_vol_str,  # 顯示張數
-            "10日均量(張)": vol_10ma_str, # 顯示張數
+            "成交量(張)": vol_str,
+            "預估量(張)": est_vol_str,
+            "10日均量(張)": vol_10ma_str,
             "量比": vol_ratio_str,
             "月線乖離率": f"{bias:.2f}%",
             "技術訊號": signal,
@@ -256,7 +257,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         if st.button("🔄 強制更新技術指標 (均線/均量)"):
             with st.spinner("計算技術指標中 (抓取歷史K線)..."):
                 new_ta = market_data.get_batch_technical_analysis(target_stocks)
-                # 更新 session
                 current_ta = st.session_state.get("ta_data", {})
                 current_ta.update(new_ta)
                 st.session_state["ta_data"] = current_ta
