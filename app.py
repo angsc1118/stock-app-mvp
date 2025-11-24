@@ -30,43 +30,62 @@ except:
 
 # 2. 側邊欄
 with st.sidebar:
-    st.title("🚀 戰情室控制台")
-    if st.button("🔄 更新即時股價 (Fugle)", use_container_width=True):
+# 2. 標題與控制台 (原側邊欄移至此)
+st.title("🚀 股票資產戰情室")
+
+with st.container(border=True):
+    col_btn1, col_btn2, col_info = st.columns([1.5, 1.5, 4])
+    
+    with col_btn1:
+        if st.button("🔄 更新即時股價 (Fugle)", use_container_width=True):
+            if not df_raw.empty:
+                temp_fifo = logic.calculate_fifo_report(df_raw)
+                if not temp_fifo.empty:
+                    stock_ids = temp_fifo['股票代號'].unique().tolist()
+                    with st.spinner('連線 API 更新報價中...'):
+                        prices = market_data.get_realtime_prices(stock_ids)
+                        ta_data = market_data.get_batch_technical_analysis(stock_ids)
+                    st.session_state["realtime_prices"] = prices
+                    st.session_state["ta_data"] = ta_data
+                    tw_time = datetime.utcnow() + timedelta(hours=8)
+                    st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
+                    st.rerun()
+
+    with col_btn2:
         if not df_raw.empty:
-            temp_fifo = logic.calculate_fifo_report(df_raw)
-            if not temp_fifo.empty:
-                stock_ids = temp_fifo['股票代號'].unique().tolist()
-                with st.spinner('連線 API 更新報價中...'):
-                    prices = market_data.get_realtime_prices(stock_ids)
-                    ta_data = market_data.get_batch_technical_analysis(stock_ids)
-                st.session_state["realtime_prices"] = prices
-                st.session_state["ta_data"] = ta_data
-                tw_time = datetime.utcnow() + timedelta(hours=8)
-                st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
-                st.rerun()
-    
-    if st.session_state["price_update_time"]:
-        st.caption(f"🕒 最後更新: {st.session_state['price_update_time']}")
-    else:
-        st.caption("🕒 尚未更新 (顯示庫存成本)")
-    
-    st.divider()
-    if not df_raw.empty:
-        _acc_bals = logic.calculate_account_balances(df_raw)
-        _tot_cash = sum(_acc_bals.values())
-        _fifo_tmp = logic.calculate_fifo_report(df_raw)
-        _curr_prices = st.session_state.get("realtime_prices", {})
-        _df_pnl = logic.calculate_unrealized_pnl(_fifo_tmp, _curr_prices)
-        _tot_stock = _df_pnl['股票市值'].sum() if not _df_pnl.empty else 0
-        _tot_asset = _tot_cash + _tot_stock
-        if st.button("📝 記錄今日資產", use_container_width=True):
-            try:
-                today_tw = (datetime.utcnow() + timedelta(hours=8)).date()
-                database.save_asset_history(today_tw, int(_tot_asset), int(_tot_cash), int(_tot_stock))
-                st.success(f"已記錄: ${_tot_asset:,}")
-            except Exception as e:
-                st.error(f"記錄失敗: {e}")
-    st.info("💡 提示：如需「新增交易」或「查詢明細」，請點擊左側側邊欄的 **帳務管理** 頁面。")
+            # 預先計算資產總額供按鈕使用
+            _acc_bals = logic.calculate_account_balances(df_raw)
+            _tot_cash = sum(_acc_bals.values())
+            _fifo_tmp = logic.calculate_fifo_report(df_raw)
+            _curr_prices = st.session_state.get("realtime_prices", {})
+            _df_pnl = logic.calculate_unrealized_pnl(_fifo_tmp, _curr_prices)
+            _tot_stock = _df_pnl['股票市值'].sum() if not _df_pnl.empty else 0
+            _tot_asset = _tot_cash + _tot_stock
+            
+            if st.button("📝 記錄今日資產", use_container_width=True):
+                try:
+                    today_tw = (datetime.utcnow() + timedelta(hours=8)).date()
+                    database.save_asset_history(today_tw, int(_tot_asset), int(_tot_cash), int(_tot_stock))
+                    st.success(f"已記錄: ${_tot_asset:,}")
+                except Exception as e:
+                    st.error(f"記錄失敗: {e}")
+
+    with col_info:
+        # 垂直置中顯示時間
+        st.markdown(
+            f"""
+            <div style="display: flex; align-items: center; height: 100%;">
+                <span style="font-size: 1.1em; color: gray;">
+                🕒 最後更新: {st.session_state.get('price_update_time', '尚未更新 (顯示庫存成本)')}
+                </span>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+st.info("💡 提示：如需「新增交易」或「查詢明細」，請點擊左側側邊欄的 **帳務管理** 頁面。")
+
+
 
 # 3. Dashboard Fragment
 @st.fragment(run_every=60)
