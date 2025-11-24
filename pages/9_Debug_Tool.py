@@ -23,11 +23,11 @@ if target_stock:
     st.subheader(f"🔍 {target_stock} 計算過程追蹤")
 
     # 3. 模擬 logic.py 的前處理 (排序)
-    # 注意：這裡我們把排序邏輯印出來看
     df = df_raw.copy()
     df.columns = df.columns.str.strip()
     col_date = '交易日期'
     col_id = '股票代號'
+    col_action = '交易類別'
     
     # 確保日期格式
     df[col_date] = pd.to_datetime(df[col_date])
@@ -35,12 +35,21 @@ if target_stock:
     # 篩選該股票
     df_target = df[df[col_id].astype(str).str.strip() == str(target_stock)].copy()
     
-    # 依照日期排序 (這就是程式看到的順序)
-    df_target = df_target.sort_values(by=col_date)
+    # [新增] 檢查同日多筆交易
+    date_counts = df_target.groupby(col_date)[col_action].nunique()
+    multi_action_dates = date_counts[date_counts > 1].index.tolist()
+    
+    if multi_action_dates:
+        st.warning(f"⚠️ 偵測到以下日期同時存在多種交易類別 (如買進+賣出)，系統已自動強制排序 (買進優先)：")
+        for d in multi_action_dates:
+            st.write(f"- {d.strftime('%Y-%m-%d')}")
+    
+    # [模擬 Logic 排序]：套用新邏輯
+    df_target['sort_order'] = df_target[col_action].apply(logic._get_action_sort_order)
+    df_target = df_target.sort_values(by=[col_date, 'sort_order'])
     
     # 顯示原始資料排序
-    st.markdown("### 1. 程式讀到的交易順序")
-    st.markdown("請檢查下表中，**同一天的交易，是否「賣出」排在「買進」前面？** 如果是，這就是原因。")
+    st.markdown("### 1. 程式邏輯排序後的交易順序 (買進應在賣出前)")
     st.dataframe(df_target[['交易日期', '交易類別', '股數', '單價', '交易帳戶']], use_container_width=True)
 
     # 4. 逐步執行 FIFO 並顯示 Log
