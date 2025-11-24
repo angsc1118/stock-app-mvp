@@ -2,8 +2,8 @@
 # 檔案名稱: pages/1_Account_Management.py
 # 
 # 修改歷程:
-# 2025-11-24 14:15:00: [Fix] 確保 Tab 2 的個股損益查詢功能正常顯示
-# 2025-11-23: [Update] 調整版面配置，將交易帳戶與交易日期分開顯示
+# 2025-11-24 15:10:00: [Fix] 修正詳細交易紀錄表格未連動個股篩選的問題
+# 2025-11-24 14:50:00: [Fix] 修復 Tab 2 個股損益查詢功能，確保選項正確載入
 # ==============================================================================
 
 import streamlit as st
@@ -19,7 +19,10 @@ import market_data
 st.set_page_config(page_title="帳務管理", layout="wide", page_icon="📝")
 st.title("📝 帳務管理中心")
 
-# ... (資料讀取、Session State 初始化、Callback 保持不變，省略以節省篇幅) ...
+# ==============================================================================
+# 1. 資料讀取與初始化
+# ==============================================================================
+
 try:
     stock_map = database.get_stock_info_map()
 except:
@@ -96,9 +99,9 @@ with st.sidebar:
     mode = st.radio("選擇功能", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
-        st.date_input("交易日期", key="txn_date")
-        st.selectbox("交易帳戶", options=account_list, key="txn_account")
-        
+        col1, col2 = st.columns(2)
+        col1.date_input("交易日期", key="txn_date")
+        col2.selectbox("交易帳戶", options=account_list, key="txn_account")
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
         is_cash_op = input_action in ['入金', '出金']
 
@@ -114,6 +117,7 @@ with st.sidebar:
                     st.session_state["txn_stock_name"] = found_name
                     st.rerun()
 
+        col2 = st.empty()
         if is_cash_op:
             st.text_input("股票名稱", placeholder="(可留空)", key="txn_stock_name")
         else:
@@ -126,7 +130,6 @@ with st.sidebar:
 
         col3.number_input(qty_label, min_value=0, step=1000, key="txn_qty")
         col4.number_input(price_label, min_value=0.0, step=0.5, format="%.2f", key="txn_price")
-        
         st.text_area("備註", placeholder="選填", key="txn_notes")
         st.button("💾 提交交易", on_click=submit_callback, use_container_width=True)
         
@@ -180,9 +183,11 @@ with tab1:
         df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
         
         if not df_unrealized.empty:
+            # 技術指標
             df_unrealized['技術訊號'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('Signal', '-'))
             df_unrealized['月線(20MA)'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('MA20', 0))
 
+            # 虧損警示
             loss_threshold = -20.0
             danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold]
             if not danger_stocks.empty:
@@ -237,6 +242,7 @@ with tab2:
             else: df_view = df_realized_all[df_realized_all['年'] == selected_year]
             
             if not df_view.empty:
+                # KPI
                 pnl_sum = df_view['已實現損益'].sum()
                 div_sum = df_view[df_view['交易類別'] == '股息']['已實現損益'].sum()
                 trades = df_view[df_view['交易類別'] == '賣出']
@@ -249,8 +255,10 @@ with tab2:
                 c3.metric("交易勝率", f"{win_rate:.1f}%")
                 st.divider()
                 
+                # 圖表
                 g1, g2 = st.columns(2)
                 with g1:
+                    st.markdown("##### 月度損益")
                     m_pnl = df_view.groupby('月')['已實現損益'].sum().reset_index()
                     if selected_year == "全部": m_pnl = m_pnl.sort_values('月').tail(12)
                     else: m_pnl = m_pnl.sort_values('月')
@@ -261,15 +269,19 @@ with tab2:
                     st.plotly_chart(fig_m, use_container_width=True)
                 with g2:
                     st.markdown("##### 🏆 個股貢獻度")
-                    all_stocks = df_view['股票'].unique()
-                    # [重要] 新增個股查詢功能
-                    sel_stocks = st.multiselect("🔍 查詢特定個股 (留空顯示 Top 8)", options=all_stocks)
+                    all_view_stocks = df_view['股票'].unique()
+                    sel_stocks = st.multiselect("🔍 查詢特定個股 (留空顯示 Top 8)", options=all_view_stocks)
+                    
                     stock_pnl = df_view.groupby('股票')['已實現損益'].sum().reset_index()
                     
+                    # 篩選邏輯
                     if sel_stocks:
                         stock_pnl = stock_pnl[stock_pnl['股票'].isin(sel_stocks)]
+                        # [新增] 篩選詳細資料表用的 df_filtered
+                        df_filtered_view = df_view[df_view['股票'].isin(sel_stocks)]
                         h = 400 + len(sel_stocks)*20
                     else:
+                        df_filtered_view = df_view # 沒選就顯示全部
                         h = 400
                         if len(stock_pnl) > 16:
                             stock_pnl = pd.concat([stock_pnl.nlargest(8,'已實現損益'), stock_pnl.nsmallest(8,'已實現損益')]).drop_duplicates()
@@ -281,6 +293,16 @@ with tab2:
                     fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"), height=h)
                     st.plotly_chart(fig_s, use_container_width=True)
 
+                with st.expander("查看詳細交易紀錄", expanded=True):
+                    # [Fix] 這裡改用 df_filtered_view (經過篩選的資料)
+                    st.dataframe(
+                        df_filtered_view[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
+                        .style.format({
+                            "已實現損益": "{:,.0f}", "本金(成本)": "{:,.0f}", "報酬率 (%)": "{:,.2f}%"
+                        })
+                        .map(lambda x: f'color: {"red" if x > 0 else "green" if x < 0 else "black"}', subset=['已實現損益', '報酬率 (%)']),
+                        use_container_width=True
+                    )
             else: st.info("無資料")
         else: st.info("尚無已實現損益。")
 
