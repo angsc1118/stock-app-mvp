@@ -2,7 +2,9 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
-# 2025-11-23: [Update] 修正格式化問題；確保 Vol10 為張數
+# 2025-11-24 09:15:00: [Fix] 修正 FIFO 浮點數誤差問題 (增加 epsilon 閾值過濾極小庫存)
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
+# 2025-11-23: [Fix] 補全所有核心函式 (FIFO, 損益, 餘額, 動能)，修正 AttributeError
 # ==============================================================================
 
 import pandas as pd
@@ -130,9 +132,13 @@ def calculate_fifo_report(df):
                     sell_qty -= batch['qty']
     
     report_data = []
+    EPSILON = 0.001  # 定義一個極小值作為誤差容許範圍
+
     for sid, batches in portfolio.items():
         total_shares = sum(b['qty'] for b in batches)
-        if total_shares > 0:
+        
+        # [修正] 使用 epsilon 判斷是否為 0
+        if total_shares > EPSILON:
             total_cost = sum(b['qty'] * b['unit_cost'] for b in batches)
             report_data.append({
                 '股票代號': sid,
