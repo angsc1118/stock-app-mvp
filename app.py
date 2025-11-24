@@ -2,7 +2,7 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-11-24 13:00:00: [Fix] 調整 KPI 順序；修正現金水位字體顏色問題 (使用 Metric 原生樣式)
+# 2025-11-24 14:15:00: [Fix] 調整首頁字體顏色；使用 metric 顯示現金水位避免黑色背景消失
 # ==============================================================================
 
 import streamlit as st
@@ -97,24 +97,20 @@ def render_dashboard(df_raw, auto_refresh=False):
 
     if auto_refresh: st.caption(f"⚡ 自動更新中... 最後更新: {st.session_state.get('price_update_time', 'N/A')}")
     
-    # --- A. KPI 指標列 (修正順序與顏色) ---
+    # --- A. KPI 指標列 ---
     k1, k2, k3, k4 = st.columns(4)
     
     k1.metric("💰 總資產淨值", f"${int(total_assets):,}")
     k2.metric("💵 總現金餘額", f"${int(total_cash):,}")
     
-    # 現金水位：使用 delta 來呈現顏色，避免背景色問題
-    # 邏輯：水位越高(現金多) 越安全(綠)? 還是越低越好? 通常看個人策略
-    # 這裡假設：<10% 危險(紅), >50% 安全(綠)
-    ratio_delta_color = "normal"
-    ratio_label = f"{cash_ratio:.2f}%"
+    # [修正] 使用 st.metric 並透過 label 來標示水位高低，避免字體顏色問題
+    ratio_label = "💧 現金水位"
     if cash_ratio < 10: 
-        ratio_delta_color = "inverse" # 紅色
-        ratio_label += " (過低)"
+        ratio_label += " (⚠️ 過低)"
     elif cash_ratio > 80:
-        ratio_label += " (高水位)"
+        ratio_label += " (⬆️ 高水位)"
     
-    k3.metric("💧 現金水位", f"{cash_ratio:.2f}%", delta=None) # 簡單顯示，避免顏色混淆
+    k3.metric(ratio_label, f"{cash_ratio:.2f}%", delta=None) 
     
     k4.metric("📈 未實現損益", f"${int(total_unrealized_pnl):,}", delta=f"{unrealized_ret:.2f}%")
 
