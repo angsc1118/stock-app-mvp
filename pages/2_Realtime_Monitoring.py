@@ -2,8 +2,8 @@
 # 檔案名稱: pages/2_Realtime_Monitoring.py
 # 
 # 修改歷程:
+# 2025-11-24 17:00:00: [Debug] 新增詳細的量比計算參數除錯表 (檢查現量、倍數、均量)
 # 2025-11-24 14:50:00: [Fix] 修正量比顯示問題；優化 Vol10 與量比的格式化邏輯
-# 2025-11-24 14:30:00: [Fix] 修正量比顯示問題；若無 Vol10 顯示提示；調整欄位寬度與格式
 # ==============================================================================
 
 import streamlit as st
@@ -113,10 +113,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     # 4. 組裝表格資料
     table_rows = []
     alerts = []
-    debug_list = []
+    debug_ta_list = []      # 原有的 TA Debug
+    debug_calc_list = []    # [新增] 量比計算 Debug
     
-    # 檢查是否有 TA 資料 (Vol10)
-    # 如果 session 中沒有 ta_data，提示使用者更新
+    # 檢查是否有 TA 資料
     if not ta_data:
         st.warning("⚠️ 尚未取得「10日均量」資料，量比無法計算。請點擊下方「🔄 更新技術指標」按鈕。")
 
@@ -133,9 +133,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         bias = ta.get('Bias', 0)
         vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
         
-        # 收集 Debug 資訊
+        # 收集 TA Debug 資訊
         if 'debug_info' in ta:
-            debug_list.append({
+            debug_ta_list.append({
                 '股票代號': symbol,
                 '10日均量(Vol10)': vol_10ma,
                 '歷史資料(末3筆)': ta['debug_info']
@@ -143,6 +143,16 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         
         # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
+
+        # 收集 Calculation Debug 資訊 [新增]
+        debug_calc_list.append({
+            '股票代號': symbol,
+            '現量 (Vol)': vol,
+            '倍數 (Mult)': multiplier,
+            '預估量 (Est)': est_vol,
+            '10日均量 (MA10)': vol_10ma,
+            '量比 (Ratio)': vol_ratio
+        })
 
         # 取得基本資料
         name = ""
@@ -190,12 +200,14 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         
         # 10MA 量顯示邏輯
         if vol_10ma > 0:
-            # math.ceil 無條件進位
             vol_10ma_lots = math.ceil(vol_10ma / 1000)
             vol_10ma_str = f"{vol_10ma_lots:,}"
             
             # 量比顯示邏輯
-            vol_ratio_str = f"{vol_ratio:.2f}"
+            if vol == 0:
+                vol_ratio_str = "0.00 (無量)" # 明確標示現量為0
+            else:
+                vol_ratio_str = f"{vol_ratio:.2f}"
         else:
             vol_10ma_str = "N/A"
             vol_ratio_str = "-" # 無法計算
@@ -203,9 +215,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         table_rows.append({
             "代號": symbol,
             "名稱": name,
-            "現價": price_str,   # 使用格式化後的字串
-            "漲跌幅": chg_str,   # 使用格式化後的字串
-            "成交量": vol_str,   # 使用格式化後的字串
+            "現價": price_str,
+            "漲跌幅": chg_str,
+            "成交量": vol_str,
             "預估量": est_vol_str,
             "10日均量": vol_10ma_str,
             "量比": vol_ratio_str,
@@ -215,7 +227,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         })
 
     # 5. 顯示內容
-    st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 預估倍數: {multiplier}")
+    st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 量能倍數: {multiplier}")
 
     if alerts:
         for alert in alerts:
@@ -254,11 +266,17 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 st.rerun()
                 
         # 除錯資訊區塊
-        with st.expander("🛠️ 技術指標除錯資訊 (查看 Vol10 來源)"):
-            st.markdown("此處顯示 API 抓取到的**歷史 K 線末 3 筆資料**。請確認：")
-            st.markdown("1. 日期是否包含今天？(若有，Vol10 會被拉低)")
-            st.markdown("2. 成交量單位是否正確？(是 '張' 還是 '股')")
-            st.write(debug_list)
+        with st.expander("🛠️ 除錯資訊 (量比計算來源)"):
+            st.info("若量比顯示 0.00，請檢查「現量」或「倍數」是否為 0。若 10日均量 為 N/A，請按上方更新按鈕。")
+            
+            tab_debug1, tab_debug2 = st.tabs(["🔢 量比計算參數明細", "📊 歷史資料 (Vol10來源)"])
+            
+            with tab_debug1:
+                st.dataframe(pd.DataFrame(debug_calc_list), use_container_width=True)
+                
+            with tab_debug2:
+                st.markdown("API 抓取到的**歷史 K 線末 3 筆資料** (檢查是否包含今日導致均量失真)：")
+                st.write(debug_ta_list)
 
 # ==============================================================================
 # 4. 執行渲染
