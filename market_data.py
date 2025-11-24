@@ -4,10 +4,8 @@
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-11-24 15:30:00: [Fix] 修正 get_technical_analysis 時區問題 (改用 UTC+8)，避免誤刪昨日K線
-# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
-# 2025-11-23: [Update] get_technical_analysis 增加回傳 debug_info (歷史資料末3筆)
-# 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
+# 2025-11-24 15:45:00: [Fix] 修正語法結構，確保時區處理與字典閉合正確
+# 2025-11-24 15:30:00: [Fix] 修正 get_technical_analysis 時區問題 (改用 UTC+8)
 # ==============================================================================
 
 import streamlit as st
@@ -89,7 +87,6 @@ def get_batch_detailed_quotes(stock_list):
         time.sleep(0.1)
     return results
 
-# --- [修改] 技術分析 (回傳 debug_info) ---
 def get_technical_analysis(symbol, api_key):
     """
     抓取歷史資料並計算技術指標
@@ -135,11 +132,15 @@ def get_technical_analysis(symbol, api_key):
         df_calc['MA60'] = df_calc['close'].rolling(window=60).mean()
         df_calc['Vol10'] = df_calc['volume'].rolling(window=10).mean()
         
-        if len(df_calc) < 1: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
+        if len(df_calc) < 1: 
+            return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
 
         last = df_calc.iloc[-1]
         price = last['close']
-        ma5, ma10, ma20, ma60 = last['MA5'], last['MA10'], last['MA20'], last['MA60']
+        ma5 = last['MA5']
+        ma10 = last['MA10']
+        ma20 = last['MA20']
+        ma60 = last['MA60']
         vol10 = last['Vol10']
         
         signals = []
