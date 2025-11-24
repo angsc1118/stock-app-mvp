@@ -2,6 +2,7 @@
 # 檔案名稱: database.py
 # 
 # 修改歷程:
+# 2025-11-24 11:10:00: [Fix] 修正 save_transaction 寫入位置錯誤 (改用指定列號寫入，避免 append_row 誤判)
 # 2025-11-23: [Update] 新增 load_mp_table 函式，讀取盤中量能倍數表
 # ==============================================================================
 
@@ -17,7 +18,7 @@ INDEX_SHEET_NAME = 'INDEX'
 ACCOUNT_SHEET_NAME = '交割帳戶設定'
 HISTORY_SHEET_NAME = '資產歷史紀錄'
 WATCHLIST_SHEET_NAME = '自選股清單'
-MP_TABLE_SHEET_NAME = 'mp_table' # 新增
+MP_TABLE_SHEET_NAME = 'mp_table'
 
 # --- 連線核心 ---
 @st.cache_resource
@@ -87,7 +88,7 @@ def load_data():
         st.error(f"讀取交易紀錄失敗: {e}")
         return pd.DataFrame()
 
-# --- 儲存交易 ---
+# --- [關鍵修正] 儲存交易 (指定位置寫入) ---
 def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
     if not ws: raise Exception(f"找不到工作表: {SHEET_NAME}")
@@ -95,13 +96,49 @@ def save_transaction(date_val, stock_id, stock_name, action, qty, price, account
     fees = logic.calculate_fees(qty, price, action, discount, stock_id)
     txn_id = logic.generate_txn_id()
     
+    # 確保每個元素都轉為字串或數值，避免 gspread 寫入錯誤
     row_data = [
-        txn_id, str(date_val), str(stock_id), stock_name, action, qty, price,
-        fees['commission'], fees['tax'], fees['other_fees'], 
-        fees['gross_amount'], fees['total_fees'], fees['net_cash_flow'],
-        False, account, notes
+        txn_id,                 # 交易ID
+        str(date_val),          # 交易日期
+        str(stock_id),          # 股票代號
+        stock_name,             # 股票名稱
+        action,                 # 交易類別
+        qty,                    # 股數
+        price,                  # 單價
+        fees['commission'],     # 手續費
+        fees['tax'],            # 交易稅
+        fees['other_fees'],     # 其他費用
+        fees['gross_amount'],   # 成交總金額
+        fees['total_fees'],     # 總費用
+        fees['net_cash_flow'],  # 淨收付金額
+        account,                # 交易帳戶
+        notes                   # 備註
     ]
-    ws.append_row(row_data)
+    
+    # 1. 取得目前已有資料的最後一列 (使用 len(get_all_values) 最準確)
+    # 雖然耗效能一點，但能保證不會覆蓋
+    all_values = ws.get_all_values()
+    next_row = len(all_values) + 1
+    
+    # 2. 指定範圍寫入 (例如 A501:O501)
+    # row_data 的長度為 15，對應 A 到 O 欄
+    col_count = len(row_data)
+    # 將欄位數轉為字母 (例如 15 -> O)，這裡簡化直接計算範圍
+    # gspread update 支援直接給 row index 和 col index
+    
+    # 使用 update_cells 或 update (range)
+    # 這裡使用 range 寫法： f"A{next_row}"
+    # 注意：如果 row_data 有空值，update 可能會報錯，需確保 list 完整
+    
+    # 簡單暴力的解法：先用 append_row，但強制指定 table_range 參數 (gspread 新版功能)
+    # 或者回歸最原始且穩定的方法：update
+    
+    # 轉換 row_data 為字串陣列，避免 JSON 序列化問題
+    formatted_row = [str(item) if item is not None else "" for item in row_data]
+    
+    # 指定從第一欄開始寫入
+    ws.update(range_name=f"A{next_row}", values=[formatted_row])
+    
     st.cache_data.clear()
 
 # --- 讀取資產歷史紀錄 ---
@@ -125,8 +162,14 @@ def save_asset_history(date_str, total_assets, total_cash, total_stock):
             row_idx = col_dates.index(str(date_str)) + 1
             ws.update(range_name=f"A{row_idx}:D{row_idx}", values=[row_data])
         else:
-            ws.append_row(row_data)
+            # 對於歷史紀錄，append_row 通常比較安全，因為它是單純的 log
+            # 但為了保險，我們也可以用同樣的邏輯
+            all_values = ws.get_all_values()
+            next_row = len(all_values) + 1
+            ws.update(range_name=f"A{next_row}", values=[row_data])
+            
     except Exception as e:
+        # 如果讀取失敗，退回 append_row
         ws.append_row(row_data)
 
 # --- 讀取自選股清單 ---
@@ -141,14 +184,13 @@ def load_watchlist():
         print(f"Warning: 讀取自選股失敗: {e}")
         return pd.DataFrame()
 
-# --- [新增] 讀取量能倍數表 (mp_table) ---
-@st.cache_data(ttl=3600) # 設定較長快取，因為這張表很少變動
+# --- 讀取量能倍數表 (mp_table) ---
+@st.cache_data(ttl=3600)
 def load_mp_table():
     ws = get_worksheet(MP_TABLE_SHEET_NAME)
     if not ws: return pd.DataFrame()
     try:
         data = ws.get_all_records()
-        # 預期欄位: "時間點迄 (HH:MM)", "量能倍數"
         return pd.DataFrame(data)
     except Exception as e:
         print(f"Warning: 讀取 mp_table 失敗: {e}")
