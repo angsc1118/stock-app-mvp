@@ -2,7 +2,7 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
-# 2025-11-24 09:05:00: [Fix] 修正 calculate_account_balances 字串串接問題 (強制移除逗號再轉數值)
+# 2025-11-24 09:45:00: [Fix] 強制同日交易排序：先買進後賣出 (解決 FIFO 庫存不足錯誤)
 # 2025-11-24 09:15:00: [Fix] 修正 FIFO 浮點數誤差問題 (增加 epsilon 閾值過濾極小庫存)
 # ==============================================================================
 
@@ -71,6 +71,18 @@ def _safe_float(value):
     except:
         return 0.0
 
+def _get_action_sort_order(action):
+    """
+    [關鍵新增] 定義交易類別的排序權重
+    目的：確保同一天內，先處理「買進」(增加庫存)，再處理「賣出」(減少庫存)
+    """
+    if action in ['買進', '現金增資', '股票股利']:
+        return 1 # 最優先：建立庫存
+    elif action == '賣出':
+        return 2 # 次之：消耗庫存
+    else:
+        return 3 # 其他：如現金股利、入金出金
+
 def calculate_fifo_report(df):
     """接收 DataFrame，回傳 FIFO 計算後的庫存 DataFrame"""
     # 清理欄位名稱
@@ -88,7 +100,12 @@ def calculate_fifo_report(df):
 
     # 確保日期格式
     df[col_date] = pd.to_datetime(df[col_date])
-    df = df.sort_values(by=col_date).reset_index(drop=True)
+    
+    # [關鍵修改] 新增排序輔助欄位
+    df['sort_order'] = df[col_action].apply(_get_action_sort_order)
+    
+    # [關鍵修改] 多重排序：先按日期，同日期按類別權重 (買進 < 賣出)
+    df = df.sort_values(by=[col_date, 'sort_order']).reset_index(drop=True)
     
     portfolio = {} 
     names_map = {}
@@ -131,12 +148,11 @@ def calculate_fifo_report(df):
                     sell_qty -= batch['qty']
     
     report_data = []
-    EPSILON = 0.001  # 定義一個極小值作為誤差容許範圍
+    EPSILON = 0.001
 
     for sid, batches in portfolio.items():
         total_shares = sum(b['qty'] for b in batches)
         
-        # [修正] 使用 epsilon 判斷是否為 0
         if total_shares > EPSILON:
             total_cost = sum(b['qty'] * b['unit_cost'] for b in batches)
             report_data.append({
@@ -205,7 +221,11 @@ def calculate_realized_report(df):
     col_other = '其他費用'
 
     df[col_date] = pd.to_datetime(df[col_date])
-    df = df.sort_values(by=col_date).reset_index(drop=True)
+    
+    # [關鍵修改] 同樣套用排序邏輯
+    df['sort_order'] = df[col_action].apply(_get_action_sort_order)
+    df = df.sort_values(by=[col_date, 'sort_order']).reset_index(drop=True)
+    
     portfolio = {} 
     realized_records = []
 
@@ -278,84 +298,49 @@ def calculate_realized_report(df):
     return df_res
 
 def calculate_account_balances(df):
-    """
-    統計各帳戶的現金餘額 (強化版)
-    """
+    """統計各帳戶的現金餘額 (強化版)"""
     if df.empty: return {}
 
-    # 1. 清除欄位名稱前後空白
     df.columns = df.columns.str.strip()
-
     col_account = '交易帳戶'
     col_net_cash = '淨收付金額'
 
     if col_account not in df.columns or col_net_cash not in df.columns:
-        print("警告：找不到 '交易帳戶' 或 '淨收付金額' 欄位")
         return {}
 
-    # 建立副本
     df_calc = df.copy()
-
-    # 2. 清洗數據：
     df_calc[col_account] = df_calc[col_account].astype(str).str.strip()
-    # [修正重點] 強制轉字串 -> 移除逗號与錢字號 -> 再轉數值
     df_calc[col_net_cash] = df_calc[col_net_cash].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
     df_calc[col_net_cash] = pd.to_numeric(df_calc[col_net_cash], errors='coerce').fillna(0)
     
-    # 3. 排除帳戶名稱為空的資料
     df_calc = df_calc[df_calc[col_account] != '']
-
     balances = df_calc.groupby(col_account)[col_net_cash].sum().to_dict()
     
     return balances
 
-# ------------------------------------------------------------------------------
-#  [新增功能] 盤中動能相關邏輯
-# ------------------------------------------------------------------------------
-
+# --- 盤中動能相關邏輯 ---
 def get_volume_multiplier(current_time_str, mp_df):
-    """
-    根據當前時間查表取得預估量倍數
-    """
-    if mp_df.empty:
-        return 1.0
-    
+    if mp_df.empty: return 1.0
     mp_df.columns = mp_df.columns.str.strip()
     col_time = "時間點迄 (HH:MM)"
     col_mult = "量能倍數"
-    
-    if col_time not in mp_df.columns or col_mult not in mp_df.columns:
-        return 1.0
+    if col_time not in mp_df.columns or col_mult not in mp_df.columns: return 1.0
 
     try:
         for index, row in mp_df.iterrows():
             limit_time = str(row[col_time]).strip()
-            # 格式化為 HH:MM
             if ':' in limit_time:
                 h, m = limit_time.split(':')
                 limit_time = f"{int(h):02d}:{int(m):02d}"
-            
             if current_time_str <= limit_time:
-                multiplier = float(row[col_mult])
-                return multiplier
-        
+                return float(row[col_mult])
         return 1.0
-        
     except Exception as e:
         print(f"Multiplier calc error: {e}")
         return 1.0
 
 def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
-    """
-    計算動能指標
-    """
-    if vol_10ma is None or vol_10ma == 0:
-        return 0, 0
-    
-    # 預估量 = 目前量 * 倍數
+    if vol_10ma is None or vol_10ma == 0: return 0, 0
     est_vol = current_vol * multiplier
-    
-    # 量比 = 預估量 / 10日均量
     ratio = est_vol / vol_10ma
-    
     return int(est_vol), round(ratio, 2)
