@@ -46,6 +46,17 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
     # 補齊缺漏欄位
     for col in column_order:
         if col not in current_watchlist.columns: current_watchlist[col] = ""
+
+    # 2. [關鍵修正] 強制轉型資料型態，避免 st.data_editor 報錯
+    # 將文字欄位強制轉為字串 (避免 2330 被當成數字)
+    text_cols = ['群組', '股票代號', '股票名稱', '備註']
+    for col in text_cols:
+        current_watchlist[col] = current_watchlist[col].astype(str).replace('nan', '')
+
+    # 將數值欄位強制轉為數字 (將空字串或錯誤格式轉為 NaN，Streamlit 才能接受)
+    num_cols = ['警示價_高', '警示價_低']
+    for col in num_cols:
+        current_watchlist[col] = pd.to_numeric(current_watchlist[col], errors='coerce')
     
     # 顯示編輯器
     edited_watchlist = st.data_editor(
