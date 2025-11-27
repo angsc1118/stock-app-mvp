@@ -163,26 +163,49 @@ def render_dashboard(df_raw, auto_refresh=False):
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # C. 圓餅圖
+# C. 圓餅圖
     col_chart1, col_chart2 = st.columns(2)
     with col_chart1:
-        st.subheader("🍰 資產配置 (現金 vs 持股)")
+        st.subheader("🍰 資產配置 (各帳戶現金 vs 持股)")
         if total_assets > 0:
             pie_data = []
-            # 整合現金
-            if total_cash > 0:
-                pie_data.append({'類別': '現金部位', '金額': total_cash, 'Color': '#90CAF9'}) # 淺藍
-            # 整合股票
+            
+            # [復原邏輯] 1. 遍歷顯示個別帳戶現金
+            # 這樣可以看清楚資金散落在哪些帳戶 (e.g. 國泰, 玉山)
+            for acc_name, amount in acc_balances.items():
+                if amount > 0:
+                    pie_data.append({
+                        '類別': f'現金-{acc_name}', 
+                        '金額': amount,
+                        'Group': 'Cash' # 用於後續可能的顏色分組
+                    })
+            
+            # 2. 加入股票部位
             if total_market_value > 0:
-                pie_data.append({'類別': '股票部位', '金額': total_market_value, 'Color': '#EF5350'}) # 淺紅
+                pie_data.append({
+                    '類別': '股票部位', 
+                    '金額': total_market_value,
+                    'Group': 'Stock'
+                })
             
             df_pie_alloc = pd.DataFrame(pie_data)
+            
             if not df_pie_alloc.empty:
-                fig_alloc = px.pie(df_pie_alloc, values='金額', names='類別', hole=0.5, 
-                                   color='類別', 
-                                   color_discrete_map={'現金部位': '#42A5F5', '股票部位': '#EF5350'})
-                fig_alloc.update_traces(textinfo='percent+label')
-                fig_alloc.update_layout(showlegend=False, margin=dict(t=20, b=20, l=20, r=20))
+                # 這裡不使用強制顏色表 (color_discrete_map)，以免動態帳戶名稱對應不上
+                # 讓 Plotly 自動分配顏色，以區分不同帳戶
+                fig_alloc = px.pie(df_pie_alloc, values='金額', names='類別', hole=0.5)
+                
+                # 優化標籤顯示
+                fig_alloc.update_traces(textinfo='percent+label', textposition='inside')
+                
+                # 針對 "股票部位" 若能手動指定顏色更好，但因 names 是動態的，
+                # 這裡保持預設顏色以確保所有帳戶都能被區分
+                
+                fig_alloc.update_layout(
+                    showlegend=True, 
+                    margin=dict(t=20, b=20, l=20, r=20),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5) # 圖例移到底部避免遮擋
+                )
                 st.plotly_chart(fig_alloc, use_container_width=True)
             else:
                 st.info("無資產資料")
@@ -193,7 +216,11 @@ def render_dashboard(df_raw, auto_refresh=False):
             # [UI優化] 自動顯示前幾大持股，避免太亂
             fig_stock_pie = px.pie(df_unrealized, values='股票市值', names='股票', hole=0.5)
             fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_stock_pie.update_layout(showlegend=True, margin=dict(t=20, b=20, l=20, r=20)) 
+            fig_stock_pie.update_layout(
+                showlegend=True, 
+                margin=dict(t=20, b=20, l=20, r=20),
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+            ) 
             st.plotly_chart(fig_stock_pie, use_container_width=True)
         else:
             st.info("尚無持股資料")
