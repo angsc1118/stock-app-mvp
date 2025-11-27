@@ -2,8 +2,8 @@
 # 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
+# 2025-11-27 14:50:00: [Feat] 新增「自選股管理」編輯器 (st.data_editor)
 # 2025-11-27 14:30:00: [UI] 優化告警顯示，改用 Expander 彙整並預設收合
-# 2025-11-24 17:00:00: [Debug] 新增詳細的量比計算參數除錯表
 # ==============================================================================
 
 import streamlit as st
@@ -20,7 +20,7 @@ st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
 # ==============================================================================
-# 1. 資料準備
+# 1. 資料準備與自選股管理 (UI Update)
 # ==============================================================================
 
 # 讀取庫存
@@ -31,13 +31,65 @@ try:
 except:
     inventory_stocks = []
 
-# 讀取自選股
+# --- [New] 自選股管理區塊 ---
+with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", expanded=False):
+    st.caption("💡 操作說明：直接在下方表格修改。新增請點最後一列；刪除請選取列後按 Delete。完成後請務必點擊「💾 儲存變更」。")
+    
+    # 讀取現有清單
+    try:
+        current_watchlist = database.load_watchlist()
+    except:
+        current_watchlist = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
+
+    # 確保欄位順序與型態
+    column_order = ['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註']
+    # 補齊缺漏欄位
+    for col in column_order:
+        if col not in current_watchlist.columns: current_watchlist[col] = ""
+    
+    # 顯示編輯器
+    edited_watchlist = st.data_editor(
+        current_watchlist[column_order],
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config={
+            "群組": st.column_config.SelectboxColumn(
+                "群組",
+                options=["自選", "觀察", "短線", "長線"], # 您可以自定義選項，或讓使用者手輸(改用 TextColumn)
+                required=True
+            ),
+            "股票代號": st.column_config.TextColumn("股票代號", required=True, validate="^[0-9A-Za-z]+$"),
+            "警示價_高": st.column_config.NumberColumn("警示價_高 (突破)", min_value=0, step=0.1, format="%.2f"),
+            "警示價_低": st.column_config.NumberColumn("警示價_低 (跌破)", min_value=0, step=0.1, format="%.2f"),
+        },
+        key="watchlist_editor"
+    )
+
+    # 儲存按鈕
+    if st.button("💾 儲存變更至資料庫", type="primary"):
+        try:
+            database.save_watchlist(edited_watchlist)
+            st.toast("✅ 自選股清單已更新！", icon="💾")
+            time.sleep(1) # 讓使用者看到訊息
+            st.rerun() # 重新整理以更新下方監控表
+        except Exception as e:
+            st.error(f"儲存失敗: {e}")
+
+# ==============================================================================
+# 2. 重新整理後的資料讀取 (用於下方監控)
+# ==============================================================================
+# 為了確保下方監控使用的是最新(可能剛存好)的資料，我們再讀一次
+# 雖然上面 database.save_watchlist 已經清過 cache，但變數 scope 的關係，這裡重新整理變數比較保險
+
 try:
     df_watch = database.load_watchlist()
     if not df_watch.empty and '股票代號' in df_watch.columns:
         df_watch['股票代號'] = df_watch['股票代號'].astype(str).str.strip()
         groups = ["全部", "庫存持股"]
-        if '群組' in df_watch.columns: groups += df_watch['群組'].unique().tolist()
+        if '群組' in df_watch.columns: 
+            # 排除空值
+            valid_groups = [g for g in df_watch['群組'].unique().tolist() if g]
+            groups += valid_groups
         groups = list(set(groups))
         groups.sort()
     else:
@@ -53,7 +105,7 @@ except:
     df_mp = pd.DataFrame()
 
 # ==============================================================================
-# 2. 側邊欄設定
+# 3. 側邊欄設定
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ 監控設定")
@@ -73,7 +125,7 @@ with st.sidebar:
     """)
 
 # ==============================================================================
-# 3. 核心監控邏輯 (Fragment)
+# 4. 核心監控邏輯 (Fragment)
 # ==============================================================================
 
 @st.fragment(run_every=30 if auto_refresh else None)
@@ -91,7 +143,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             target_stocks = df_watch[df_watch['群組'] == selected_group]['股票代號'].tolist()
     
     if not target_stocks:
-        st.info("此群組無股票可監控。")
+        st.info("此群組無股票可監控。請至上方「⚙️ 管理自選股清單」新增股票。")
         return
 
     # 2. 抓取資料 (即時報價 + 技術指標)
@@ -112,8 +164,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
 
     # 4. 組裝表格資料
     table_rows = []
-    
-    # [Data Struct] 改用 list of dict 結構來儲存警示，方便後續 render
     alerts_data = [] 
     
     debug_ta_list = []      # 原有的 TA Debug
@@ -157,11 +207,15 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             '量比 (Ratio)': vol_ratio
         })
 
-        # 取得基本資料
+        # 取得基本資料 (優先使用自選股設定的名稱/警示價)
         name = ""
         high_limit = 0
         low_limit = 0
+        
+        # 從 df_watch 查找該股票的設定
+        # 注意: 可能有多筆 (不同群組)，這裡取第一筆或邏輯上的合併
         watch_info = df_watch[df_watch['股票代號'] == symbol]
+        
         if not watch_info.empty:
             name = watch_info.iloc[0]['股票名稱']
             try: high_limit = float(watch_info.iloc[0]['警示價_高'])
@@ -297,10 +351,16 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 st.write(debug_ta_list)
 
 # ==============================================================================
-# 4. 執行渲染
+# 5. 執行渲染
 # ==============================================================================
 
 if not groups:
-    st.warning("無法讀取「自選股清單」或「交易紀錄」。請確認 Google Sheet 設定。")
+    # 這裡的邏輯修正：即便一開始沒有 group，也會因為上面 load_watchlist 產生的空 dataframe 而允許進入
+    # 但為了保險，我們檢查是否 inventory 也空
+    if not inventory_stocks and df_watch.empty:
+        st.warning("無法讀取「自選股清單」且無庫存。請嘗試使用上方編輯器新增自選股。")
+        render_monitor_table("全部", inventory_stocks, df_watch, df_mp)
+    else:
+        render_monitor_table(selected_group, inventory_stocks, df_watch, df_mp)
 else:
     render_monitor_table(selected_group, inventory_stocks, df_watch, df_mp)
