@@ -2,13 +2,14 @@
 # 檔案名稱: pages/1_📝_帳務管理.py
 # 
 # 修改歷程:
+# 2025-11-27 14:30:00: [UI] 優化告警顯示，改用 Expander 收合嚴重虧損警示
 # 2025-11-27 14:00:00: [Refactor] 拆分頁面：移除績效分析功能 (移至獨立頁面)
-# 2025-11-27 13:30:00: [UI] 修正 UI/UX 規範 (紅漲綠跌、千分位)
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
 from datetime import date
+import time
 
 import database
 import logic
@@ -83,7 +84,7 @@ def submit_callback():
             else:
                 st.toast(f"✅ 成功新增：{s_name} ({s_id}) {s_action}", icon="💾")
             
-            st.session_state["form_msg"] = None # 清除錯誤狀態
+            st.session_state["form_msg"] = None 
             
         except Exception as e:
             st.session_state["form_msg"] = {"type": "error", "content": [f"寫入失敗: {e}"]}
@@ -171,7 +172,7 @@ with st.sidebar:
             for err in msg["content"]: st.error(err)
 
 # ==============================================================================
-# 3. 主畫面：分頁檢視 (僅庫存與流水帳)
+# 3. 主畫面：分頁檢視
 # ==============================================================================
 
 # 定義樣式函數
@@ -203,6 +204,30 @@ with tab1:
             df_unrealized['技術訊號'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('Signal', '-'))
             df_unrealized['月線(20MA)'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('MA20', 0))
 
+            # [UI Optimization] 虧損警示區塊 (使用 Expander 漸進式揭露)
+            loss_threshold = -20.0
+            # 建立一個副本以免影響主表顯示
+            danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold].copy()
+            
+            if not danger_stocks.empty:
+                count = len(danger_stocks)
+                # 標題顯示數量，讓使用者決定是否展開
+                with st.expander(f"📉 警示：共 {count} 檔庫存虧損超過 {abs(loss_threshold)}% (點擊展開查看)", expanded=False):
+                    st.markdown("下列股票已觸及嚴重虧損標準，請重新審視交易計畫：")
+                    # 簡化版的小表格
+                    st.dataframe(
+                        danger_stocks[['股票', '庫存股數', '平均成本', '目前市價', '報酬率 (%)']],
+                        column_config={
+                            "庫存股數": st.column_config.NumberColumn(format="%d"),
+                            "平均成本": st.column_config.NumberColumn(format="%.2f"),
+                            "目前市價": st.column_config.NumberColumn(format="%.2f"),
+                            "報酬率 (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            
+            # 主資料表
             display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '月線(20MA)', '技術訊號', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)']
             final_cols = [c for c in display_cols if c in df_unrealized.columns]
 
@@ -218,7 +243,7 @@ with tab1:
                 .map(highlight_severe_loss, subset=['報酬率 (%)'])
                 
             st.dataframe(st_df, use_container_width=True, height=600)
-            st.caption("💡 提示：如需查看已實現損益分析，請前往左側「📊 績效分析」頁面。")
+            
         else:
             st.info("目前沒有庫存。")
     else:
