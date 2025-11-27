@@ -99,9 +99,11 @@ with st.sidebar:
     mode = st.radio("選擇功能", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
-        col1, col2 = st.columns(2)
-        col1.date_input("交易日期", key="txn_date")
-        col2.selectbox("交易帳戶", options=account_list, key="txn_account")
+        #col1, col2 = st.columns(2)
+        #col1.date_input("交易日期", key="txn_date")
+        #col2.selectbox("交易帳戶", options=account_list, key="txn_account")
+        st.date_input("交易日期", key="txn_date")
+        st.selectbox("交易帳戶", options=account_list, key="txn_account")
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
         is_cash_op = input_action in ['入金', '出金']
 

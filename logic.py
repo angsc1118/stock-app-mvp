@@ -2,6 +2,7 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
+# 2025-11-24 17:10:00: [Fix] 修正 calculate_volume_ratio 量比公式；統一單位為「張」(將 Vol10 除以 1000)
 # 2025-11-24 13:00:00: [Fix] 強化 calculate_account_balances，使用 regex 強制清除 $ 與 , 避免字串串接錯誤
 # 2025-11-24 09:45:00: [Fix] 強制同日交易排序：先買進後賣出
 # ==============================================================================
@@ -280,7 +281,23 @@ def get_volume_multiplier(current_time_str, mp_df):
     except: return 1.0
 
 def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
+    """
+    計算量比
+    current_vol: 現量 (張)
+    vol_10ma: 10日均量 (股) -> [Fix] 需轉為張
+    multiplier: 量能倍數
+    """
     if vol_10ma is None or vol_10ma == 0: return 0, 0
+    
+    # 預估量 (張)
     est_vol = current_vol * multiplier
-    ratio = est_vol / vol_10ma
+    
+    # [Fix] 單位轉換：10日均量 (股) -> 10日均量 (張)
+    vol_10ma_sheets = vol_10ma / 1000
+    
+    # 避免分母為 0
+    if vol_10ma_sheets == 0:
+        return int(est_vol), 0
+        
+    ratio = est_vol / vol_10ma_sheets
     return int(est_vol), round(ratio, 2)
