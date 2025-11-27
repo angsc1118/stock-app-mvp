@@ -1,9 +1,9 @@
 # ==============================================================================
-# 檔案名稱: pages/2_Realtime_Monitoring.py
+# 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
-# 2025-11-24 17:00:00: [Debug] 新增詳細的量比計算參數除錯表 (檢查現量、倍數、均量)
-# 2025-11-24 14:50:00: [Fix] 修正量比顯示問題；優化 Vol10 與量比的格式化邏輯
+# 2025-11-27 14:30:00: [UI] 優化告警顯示，改用 Expander 彙整並預設收合
+# 2025-11-24 17:00:00: [Debug] 新增詳細的量比計算參數除錯表
 # ==============================================================================
 
 import streamlit as st
@@ -112,9 +112,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
 
     # 4. 組裝表格資料
     table_rows = []
-    alerts = []
+    
+    # [Data Struct] 改用 list of dict 結構來儲存警示，方便後續 render
+    alerts_data = [] 
+    
     debug_ta_list = []      # 原有的 TA Debug
-    debug_calc_list = []    # [新增] 量比計算 Debug
+    debug_calc_list = []    # 量比計算 Debug
     
     # 檢查是否有 TA 資料
     if not ta_data:
@@ -144,7 +147,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
-        # 收集 Calculation Debug 資訊 [新增]
+        # 收集 Calculation Debug 資訊
         debug_calc_list.append({
             '股票代號': symbol,
             '現量 (Vol)': vol,
@@ -172,21 +175,33 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
 
         # 警示判斷
         status_icon = ""
+        stock_alerts = [] # [New] 該股的專屬警示列表
         
         # A. 價格警示
         if high_limit > 0 and price >= high_limit:
-            alerts.append(f"🔴 **{name} ({symbol})** 突破目標價 {high_limit} (現價 {price})")
+            msg = f"🔴 突破目標價 {high_limit} (現價 {price})"
+            stock_alerts.append(msg)
             status_icon += "🔴"
         if low_limit > 0 and price > 0 and price <= low_limit:
-            alerts.append(f"📉 **{name} ({symbol})** 跌破支撐價 {low_limit} (現價 {price})")
+            msg = f"📉 跌破支撐價 {low_limit} (現價 {price})"
+            stock_alerts.append(msg)
             status_icon += "📉"
             
         # B. 動能警示
-        if vol_ratio > 2.0: status_icon += "🔥"
-        elif vol_ratio > 1.5: status_icon += "🟢"
+        if vol_ratio > 2.0: 
+            stock_alerts.append(f"🔥 爆量 (量比 {vol_ratio:.2f})")
+            status_icon += "🔥"
+        elif vol_ratio > 1.5: 
+            status_icon += "🟢"
             
         # C. 技術警示
-        if bias > 20: status_icon += "⚠️"
+        if bias > 20: 
+            stock_alerts.append(f"⚠️ 乖離過大 (BIAS {bias:.2f}%)")
+            status_icon += "⚠️"
+        
+        # [New] 彙整警示
+        if stock_alerts:
+            alerts_data.append({"symbol": symbol, "name": name, "msgs": stock_alerts})
         
         # 格式化處理
         price_str = f"{price:,.2f}"
@@ -202,10 +217,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         if vol_10ma > 0:
             vol_10ma_lots = math.ceil(vol_10ma / 1000)
             vol_10ma_str = f"{vol_10ma_lots:,}"
-            
-            # 量比顯示邏輯
             if vol == 0:
-                vol_ratio_str = "0.00 (無量)" # 明確標示現量為0
+                vol_ratio_str = "0.00 (無量)"
             else:
                 vol_ratio_str = f"{vol_ratio:.2f}"
         else:
@@ -229,9 +242,14 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     # 5. 顯示內容
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 量能倍數: {multiplier}")
 
-    if alerts:
-        for alert in alerts:
-            st.error(alert)
+    # [UI Optimization] 改用 Expander 顯示彙整的警示訊息
+    if alerts_data:
+        count = len(alerts_data)
+        with st.expander(f"⚠️ 共有 {count} 檔股票出現異常/告警 (點擊展開查看)", expanded=False):
+            for item in alerts_data:
+                # 組合訊息
+                msgs_str = " | ".join(item['msgs'])
+                st.markdown(f"**{item['name']} ({item['symbol']})**: {msgs_str}")
     
     if table_rows:
         df_display = pd.DataFrame(table_rows)
