@@ -2,6 +2,7 @@
 # 檔案名稱: pages/1_Account_Management.py
 # 
 # 修改歷程:
+# 2025-11-27 13:30:00: [UI] 修正 UI/UX 規範 (紅漲綠跌、千分位、Tab3 加入 column_config)
 # 2025-11-24 15:10:00: [Fix] 修正詳細交易紀錄表格未連動個股篩選的問題
 # 2025-11-24 14:50:00: [Fix] 修復 Tab 2 個股損益查詢功能，確保選項正確載入
 # ==============================================================================
@@ -99,9 +100,6 @@ with st.sidebar:
     mode = st.radio("選擇功能", ["📝 新增交易", "🔧 帳戶餘額校正"], horizontal=True)
     
     if mode == "📝 新增交易":
-        #col1, col2 = st.columns(2)
-        #col1.date_input("交易日期", key="txn_date")
-        #col2.selectbox("交易帳戶", options=account_list, key="txn_account")
         st.date_input("交易日期", key="txn_date")
         st.selectbox("交易帳戶", options=account_list, key="txn_account")
         input_action = st.selectbox("交易類別", ['買進', '賣出', '現金股利', '股票股利', '入金', '出金'], key="txn_action")
@@ -174,6 +172,26 @@ with st.sidebar:
 # 3. 主畫面：分頁檢視
 # ==============================================================================
 
+# 定義台股紅漲綠跌樣式 (紅=漲/獲利, 綠=跌/虧損)
+def style_tw_stock_profit_loss(val):
+    if not isinstance(val, (int, float)): return ''
+    # 紅色 (#E53935) 代表正/獲利
+    if val > 0: return 'color: #E53935'
+    # 綠色 (#26a69a) 代表負/虧損
+    elif val < 0: return 'color: #26a69a'
+    return ''
+
+def highlight_severe_loss(val):
+    if not isinstance(val, (int, float)): return ''
+    # 跌幅超過 20% -> 淡綠色背景強調 "深跌/綠跌" (避免使用紅色背景混淆)
+    if val < -20:
+        return 'background-color: #E8F5E9; color: #2e7d32; font-weight: bold;'
+    elif val < 0:
+        return 'color: #26a69a'
+    elif val > 0:
+        return 'color: #E53935'
+    return ''
+
 tab1, tab2, tab3 = st.tabs(["📋 持股庫存 (明細)", "📉 獲利分析 (已實現)", "📂 原始資料庫"])
 
 # --- Tab 1: 持股庫存 ---
@@ -193,37 +211,32 @@ with tab1:
             loss_threshold = -20.0
             danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold]
             if not danger_stocks.empty:
-                st.error(f"⚠️ 警示：共有 {len(danger_stocks)} 檔股票虧損超過 {abs(loss_threshold)}%！")
+                # 提示文案使用 Emoji 🔴/🟢 輔助，避免顏色混淆
+                st.warning(f"📉 警示：共有 {len(danger_stocks)} 檔股票虧損超過 {abs(loss_threshold)}%！請留意停損。")
             
-            def color_pnl(val):
-                if isinstance(val, (int, float)):
-                    return f'color: {"red" if val > 0 else "green" if val < 0 else "black"}'
-                return ''
-            
-            def highlight_danger(val):
-                if isinstance(val, (int, float)):
-                    color = "red" if val > 0 else "green" if val < 0 else "black"
-                    bg = "background-color: #FFCDD2" if val < -20 else ""
-                    return f'color: {color}; {bg}'
-                return ''
-
             display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '月線(20MA)', '技術訊號', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)', '賣出額外費用']
             final_cols = [c for c in display_cols if c in df_unrealized.columns]
 
+            # 格式化字典
             format_dict = {
-                "庫存股數": "{:,.0f}", "平均成本": "{:,.2f}", "目前市價": "{:,.2f}",
+                "庫存股數": "{:,.0f}", 
+                "平均成本": "{:,.2f}", 
+                "目前市價": "{:,.2f}",
                 "月線(20MA)": "{:,.2f}",
-                "股票市值": "{:,.0f}", "未實現損益": "{:,.0f}", "報酬率 (%)": "{:,.2f}%",
+                "股票市值": "{:,.0f}", 
+                "未實現損益": "{:,.0f}", 
+                "報酬率 (%)": "{:,.2f}%",
                 "佔總資產比例 (%)": "{:,.2f}%"
             }
             
-            st.dataframe(
-                df_unrealized[final_cols].style
-                .format(format_dict)
-                .map(color_pnl, subset=['未實現損益']) 
-                .map(highlight_danger, subset=['報酬率 (%)']), 
-                use_container_width=True, height=600
-            )
+            # 使用 Styler 處理顏色 (Streamlit native 暫不支援 conditional text color)
+            # 紅漲綠跌原則: 未實現損益 > 0 (紅), < 0 (綠)
+            st_df = df_unrealized[final_cols].style\
+                .format(format_dict)\
+                .map(style_tw_stock_profit_loss, subset=['未實現損益'])\
+                .map(highlight_severe_loss, subset=['報酬率 (%)'])
+                
+            st.dataframe(st_df, use_container_width=True, height=600)
         else:
             st.info("目前沒有庫存。")
     else:
@@ -252,23 +265,33 @@ with tab2:
                 win_rate = (len(win_trades)/len(trades)*100) if not trades.empty else 0
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("區間總損益", f"${pnl_sum:,.0f}")
+                c1.metric("區間總損益", f"${pnl_sum:,.0f}", delta=f"${pnl_sum:,.0f}")
                 c2.metric("區間股息", f"${div_sum:,.0f}")
                 c3.metric("交易勝率", f"{win_rate:.1f}%")
                 st.divider()
                 
                 # 圖表
                 g1, g2 = st.columns(2)
+                
+                # 色彩對應：獲利(Profit)=紅, 虧損(Loss)=綠
+                color_map = {'Profit': '#E53935', 'Loss': '#26a69a'}
+                
                 with g1:
                     st.markdown("##### 月度損益")
                     m_pnl = df_view.groupby('月')['已實現損益'].sum().reset_index()
                     if selected_year == "全部": m_pnl = m_pnl.sort_values('月').tail(12)
                     else: m_pnl = m_pnl.sort_values('月')
+                    
                     m_pnl['Color'] = m_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
-                    fig_m = px.bar(m_pnl, x='月', y='已實現損益', color='Color', color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
-                    fig_m.update_traces(hovertemplate='<b>%{x}</b><br>已實現損益: %{y:,.0f}<extra></extra>')
-                    fig_m.update_layout(showlegend=False, xaxis_title=None, yaxis=dict(tickformat=".2s"))
+                    
+                    fig_m = px.bar(m_pnl, x='月', y='已實現損益', color='Color', 
+                                   color_discrete_map=color_map)
+                    
+                    # [UI] 修正：強制顯示千分位 (,.0f)
+                    fig_m.update_traces(texttemplate='%{y:,.0f}', textposition='outside')
+                    fig_m.update_layout(showlegend=False, xaxis_title=None, yaxis=dict(tickformat=",.0f"))
                     st.plotly_chart(fig_m, use_container_width=True)
+                
                 with g2:
                     st.markdown("##### 🏆 個股貢獻度")
                     all_view_stocks = df_view['股票'].unique()
@@ -279,30 +302,35 @@ with tab2:
                     # 篩選邏輯
                     if sel_stocks:
                         stock_pnl = stock_pnl[stock_pnl['股票'].isin(sel_stocks)]
-                        # [新增] 篩選詳細資料表用的 df_filtered
                         df_filtered_view = df_view[df_view['股票'].isin(sel_stocks)]
                         h = 400 + len(sel_stocks)*20
                     else:
-                        df_filtered_view = df_view # 沒選就顯示全部
+                        df_filtered_view = df_view 
                         h = 400
                         if len(stock_pnl) > 16:
                             stock_pnl = pd.concat([stock_pnl.nlargest(8,'已實現損益'), stock_pnl.nsmallest(8,'已實現損益')]).drop_duplicates()
                     
                     stock_pnl = stock_pnl.sort_values('已實現損益', ascending=True)
                     stock_pnl['Color'] = stock_pnl['已實現損益'].apply(lambda x: 'Profit' if x >= 0 else 'Loss')
-                    fig_s = px.bar(stock_pnl, y='股票', x='已實現損益', orientation='h', color='Color', color_discrete_map={'Profit': '#E53935', 'Loss': '#26a69a'}, text_auto='.2s')
-                    fig_s.update_traces(hovertemplate='<b>%{y}</b><br>已實現損益: %{x:,.0f}<extra></extra>')
-                    fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=".2s"), height=h)
+                    
+                    fig_s = px.bar(stock_pnl, y='股票', x='已實現損益', orientation='h', color='Color', 
+                                   color_discrete_map=color_map)
+                    
+                    # [UI] 修正：強制顯示千分位 (,.0f)
+                    fig_s.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
+                    fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=",.0f"), height=h)
                     st.plotly_chart(fig_s, use_container_width=True)
 
                 with st.expander("查看詳細交易紀錄", expanded=True):
-                    # [Fix] 這裡改用 df_filtered_view (經過篩選的資料)
+                    # [UI] 使用 Styler 處理紅漲綠跌與千分位
                     st.dataframe(
                         df_filtered_view[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
                         .style.format({
-                            "已實現損益": "{:,.0f}", "本金(成本)": "{:,.0f}", "報酬率 (%)": "{:,.2f}%"
+                            "已實現損益": "{:,.0f}", 
+                            "本金(成本)": "{:,.0f}", 
+                            "報酬率 (%)": "{:,.2f}%"
                         })
-                        .map(lambda x: f'color: {"red" if x > 0 else "green" if x < 0 else "black"}', subset=['已實現損益', '報酬率 (%)']),
+                        .map(style_tw_stock_profit_loss, subset=['已實現損益', '報酬率 (%)']),
                         use_container_width=True
                     )
             else: st.info("無資料")
@@ -314,11 +342,38 @@ with tab2:
             st.markdown("##### 📋 交易流水帳")
             df_display = df_raw.copy()
             df_display['交易日期'] = pd.to_datetime(df_display['交易日期']).dt.date
-            st.dataframe(df_display.sort_values('交易日期', ascending=False), use_container_width=True)
+            
+            # [UI] 套用 st.column_config 以符合規範
+            st.dataframe(
+                df_display.sort_values('交易日期', ascending=False),
+                column_config={
+                    "交易日期": st.column_config.DateColumn("交易日期", format="YYYY-MM-DD"),
+                    "股數": st.column_config.NumberColumn("股數", format="%d"),
+                    "單價": st.column_config.NumberColumn("單價", format="$%.2f"),
+                    "手續費": st.column_config.NumberColumn("手續費", format="$%d"),
+                    "交易稅": st.column_config.NumberColumn("交易稅", format="$%d"),
+                    "成交總金額": st.column_config.NumberColumn("成交總金額", format="$%d"),
+                    "淨收付金額": st.column_config.NumberColumn("淨收付金額", format="$%d"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
         
         df_history = database.load_asset_history()
         if not df_history.empty:
             st.markdown("##### 📜 資產歷史紀錄")
             df_h_disp = df_history.copy()
             df_h_disp['日期'] = pd.to_datetime(df_h_disp['日期']).dt.date
-            st.dataframe(df_h_disp.sort_values('日期', ascending=False), use_container_width=True)
+            
+            # [UI] 套用 st.column_config
+            st.dataframe(
+                df_h_disp.sort_values('日期', ascending=False),
+                column_config={
+                    "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
+                    "總資產": st.column_config.NumberColumn("總資產", format="$%d"),
+                    "現金餘額": st.column_config.NumberColumn("現金餘額", format="$%d"),
+                    "股票市值": st.column_config.NumberColumn("股票市值", format="$%d"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
