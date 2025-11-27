@@ -66,7 +66,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
         column_config={
             "群組": st.column_config.SelectboxColumn(
                 "群組",
-                options=["自選", "觀察", "短線", "長線"], # 您可以自定義選項，或讓使用者手輸(改用 TextColumn)
+                options=["自選", "觀察", "短線", "長線", "動能" , "大戶" , "產業班" ], 
                 required=True
             ),
             "股票代號": st.column_config.TextColumn("股票代號", required=True, validate="^[0-9A-Za-z]+$"),
