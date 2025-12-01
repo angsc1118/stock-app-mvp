@@ -2,8 +2,9 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
+# 2025-12-01 11:10:00: [Feat] 新增資金水位試算 (子彈計算機)
+# 2025-11-27 15:30:00: [UI] 復原圓餅圖帳戶細節；優化圖例位置
 # 2025-11-27 13:45:00: [UI] 優化首頁 UX (行動版更新按鈕、台股紅漲綠跌 Metric、Toast 回饋)
-# 2025-11-24 16:45:00: [UI] 將戰情室控制台移回 Sidebar；移除主畫面 Container
 # ==============================================================================
 
 import streamlit as st
@@ -11,6 +12,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import date, datetime, timedelta
 import time
+import math
 
 import database
 import logic
@@ -89,7 +91,7 @@ with col_btn:
 # Dashboard Fragment
 @st.fragment(run_every=60)
 def render_dashboard(df_raw, auto_refresh=False):
-    # 計算
+    # 計算基礎數據
     acc_balances = logic.calculate_account_balances(df_raw)
     total_cash = sum(acc_balances.values())
     
@@ -114,19 +116,60 @@ def render_dashboard(df_raw, auto_refresh=False):
     k1.metric("💰 總資產淨值", f"${int(total_assets):,}")
     k2.metric("💵 總現金餘額", f"${int(total_cash):,}")
     
-    # 現金水位邏輯 (保持中性顏色或警告色，這裡設為 off 由數值自行解釋)
+    # 現金水位
     ratio_label = "💧 現金水位"
     k3.metric(ratio_label, f"{cash_ratio:.1f}%") 
     
-    # [UI優化] 關鍵修正：套用 delta_color="inverse"
-    # Streamlit 預設: 正=綠, 負=紅
-    # Inverse: 正=紅 (台股漲), 負=綠 (台股跌)
+    # [UI優化] 未實現損益：套用 delta_color="inverse" (台股紅漲綠跌)
     k4.metric(
         "📈 未實現損益", 
         f"${int(total_unrealized_pnl):,}", 
         delta=f"{unrealized_ret:.2f}%", 
         delta_color="inverse"
     )
+
+    # --- [New Feature] 資金水位試算 (子彈計算機) ---
+    with st.expander("🧮 資金水位試算 / 子彈計算機", expanded=False):
+        st.markdown("##### 🎯 設定目標與試算")
+        
+        # 1. 計算當前水位 (作為 Slider 預設值)
+        current_ratio_int = int(cash_ratio) if not math.isnan(cash_ratio) else 0
+        
+        # 2. 互動滑桿
+        target_ratio = st.slider(
+            "設定目標現金水位 (%)", 
+            min_value=0, 
+            max_value=100, 
+            value=current_ratio_int, 
+            step=5,
+            help="拉動滑桿以計算該水位下，可動用的資金多寡"
+        )
+        
+        # 3. 核心公式: X = 現金 - (總資產 * 目標比例)
+        # 若 total_assets 為 0，保護除法
+        if total_assets > 0:
+            bullets = total_cash - (total_assets * (target_ratio / 100))
+        else:
+            bullets = 0
+        
+        # 4. 顯示結果 (區分 加碼 vs 減碼)
+        c_calc1, c_calc2 = st.columns(2)
+        
+        with c_calc1:
+            if bullets > 0:
+                st.metric("🔫 可加碼投入 (子彈)", f"${int(bullets):,}", delta="Buy")
+            elif bullets < 0:
+                # 需賣出回收資金
+                st.metric("🛑 需減碼回收 (賣出)", f"${int(abs(bullets)):,}", delta="Sell", delta_color="inverse")
+            else:
+                st.info("目前已達目標水位")
+                
+        with c_calc2:
+            # 顯示試算後的預期狀態
+            expected_cash = total_assets * (target_ratio / 100)
+            expected_stock = total_assets - expected_cash
+            st.caption(f"試算後現金: ${int(expected_cash):,}")
+            st.caption(f"試算後持股: ${int(expected_stock):,}")
 
     st.divider()
 
@@ -151,7 +194,7 @@ def render_dashboard(df_raw, auto_refresh=False):
         
         # [UI優化] 線圖顏色調整
         fig_trend = px.line(df_history, x='日期', y='總資產', markers=True)
-        fig_trend.update_traces(line_color='#1E88E5', line_width=3, marker_size=8) # 使用穩重的藍色
+        fig_trend.update_traces(line_color='#1E88E5', line_width=3, marker_size=8)
         fig_trend.update_layout(
             xaxis_title=None, 
             yaxis_title=None, 
@@ -163,7 +206,7 @@ def render_dashboard(df_raw, auto_refresh=False):
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-# C. 圓餅圖
+    # C. 圓餅圖
     col_chart1, col_chart2 = st.columns(2)
     with col_chart1:
         st.subheader("🍰 資產配置 (各帳戶現金 vs 持股)")
@@ -171,13 +214,12 @@ def render_dashboard(df_raw, auto_refresh=False):
             pie_data = []
             
             # [復原邏輯] 1. 遍歷顯示個別帳戶現金
-            # 這樣可以看清楚資金散落在哪些帳戶 (e.g. 國泰, 玉山)
             for acc_name, amount in acc_balances.items():
                 if amount > 0:
                     pie_data.append({
                         '類別': f'現金-{acc_name}', 
                         '金額': amount,
-                        'Group': 'Cash' # 用於後續可能的顏色分組
+                        'Group': 'Cash'
                     })
             
             # 2. 加入股票部位
@@ -191,20 +233,15 @@ def render_dashboard(df_raw, auto_refresh=False):
             df_pie_alloc = pd.DataFrame(pie_data)
             
             if not df_pie_alloc.empty:
-                # 這裡不使用強制顏色表 (color_discrete_map)，以免動態帳戶名稱對應不上
-                # 讓 Plotly 自動分配顏色，以區分不同帳戶
+                # 讓 Plotly 自動分配顏色以區分不同帳戶
                 fig_alloc = px.pie(df_pie_alloc, values='金額', names='類別', hole=0.5)
-                
-                # 優化標籤顯示
                 fig_alloc.update_traces(textinfo='percent+label', textposition='inside')
                 
-                # 針對 "股票部位" 若能手動指定顏色更好，但因 names 是動態的，
-                # 這裡保持預設顏色以確保所有帳戶都能被區分
-                
+                # 圖例移到底部
                 fig_alloc.update_layout(
                     showlegend=True, 
                     margin=dict(t=20, b=20, l=20, r=20),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5) # 圖例移到底部避免遮擋
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
                 )
                 st.plotly_chart(fig_alloc, use_container_width=True)
             else:
@@ -213,7 +250,7 @@ def render_dashboard(df_raw, auto_refresh=False):
     with col_chart2:
         st.subheader("📊 持股分佈 (依市值)")
         if not df_unrealized.empty and total_market_value > 0:
-            # [UI優化] 自動顯示前幾大持股，避免太亂
+            # 自動顯示前幾大持股
             fig_stock_pie = px.pie(df_unrealized, values='股票市值', names='股票', hole=0.5)
             fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
             fig_stock_pie.update_layout(
