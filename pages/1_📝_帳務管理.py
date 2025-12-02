@@ -194,59 +194,56 @@ tab1, tab2 = st.tabs(["📋 持股庫存 (Overview)", "📂 交易流水帳 (Dat
 # --- Tab 1: 持股庫存 ---
 with tab1:
     if not df_raw.empty:
-        # ... (計算邏輯保持不變) ...
         df_fifo = logic.calculate_fifo_report(df_raw)
         current_prices = st.session_state.get("realtime_prices", {})
         ta_data = st.session_state.get("ta_data", {})
         df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
         
         if not df_unrealized.empty:
+            # 技術指標 (如果 Session 有資料)
             df_unrealized['技術訊號'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('Signal', '-'))
             df_unrealized['月線(20MA)'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('MA20', 0))
 
-            # ... (Expander 警示邏輯保持不變) ...
-
-            # 轉換為小數以配合 ProgressColumn 格式
-            df_unrealized['報酬率_raw'] = df_unrealized['報酬率 (%)'] / 100
-            df_unrealized['佔比_raw'] = df_unrealized['佔總資產比例 (%)'] / 100
-
-            display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '月線(20MA)', '技術訊號', '股票市值', '未實現損益', '報酬率_raw', '佔比_raw']
+            # [UI Optimization] 虧損警示區塊 (使用 Expander 漸進式揭露)
+            loss_threshold = -20.0
+            # 建立一個副本以免影響主表顯示
+            danger_stocks = df_unrealized[df_unrealized['報酬率 (%)'] < loss_threshold].copy()
+            
+            if not danger_stocks.empty:
+                count = len(danger_stocks)
+                # 標題顯示數量，讓使用者決定是否展開
+                with st.expander(f"📉 警示：共 {count} 檔庫存虧損超過 {abs(loss_threshold)}% (點擊展開查看)", expanded=False):
+                    st.markdown("下列股票已觸及嚴重虧損標準，請重新審視交易計畫：")
+                    # 簡化版的小表格
+                    st.dataframe(
+                        danger_stocks[['股票', '庫存股數', '平均成本', '目前市價', '報酬率 (%)']],
+                        column_config={
+                            "庫存股數": st.column_config.NumberColumn(format="%d"),
+                            "平均成本": st.column_config.NumberColumn(format="%.2f"),
+                            "目前市價": st.column_config.NumberColumn(format="%.2f"),
+                            "報酬率 (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            
+            # 主資料表
+            display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '月線(20MA)', '技術訊號', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)']
             final_cols = [c for c in display_cols if c in df_unrealized.columns]
 
-            # [UI Optimization] 使用 column_config 全面控制欄寬與視覺化
-            st.dataframe(
-                df_unrealized[final_cols],
-                column_config={
-                    "股票": st.column_config.TextColumn("股票", width="medium"),
-                    "庫存股數": st.column_config.NumberColumn("股數", width="small", format="%,d"),
-                    "平均成本": st.column_config.NumberColumn("成本", width="small", format="%.2f"),
-                    "目前市價": st.column_config.NumberColumn("市價", width="small", format="%.2f"),
-                    "月線(20MA)": st.column_config.NumberColumn("20MA", width="small", format="%.2f"),
-                    "技術訊號": st.column_config.TextColumn("訊號", width="medium"),
-                    "股票市值": st.column_config.NumberColumn("市值", width="small", format="$%d"),
-                    "未實現損益": st.column_config.NumberColumn("未實現損益", width="small", format="$%d"),
-                    
-                    # [New] 使用 ProgressColumn 顯示報酬率
-                    "報酬率_raw": st.column_config.ProgressColumn(
-                        "報酬率",
-                        width="medium",
-                        format="%.2f%",
-                        min_value=-0.5, # 設定進度條範圍，讓視覺更明顯
-                        max_value=0.5
-                    ),
-                    # [New] 使用 ProgressColumn 顯示佔比
-                    "佔比_raw": st.column_config.ProgressColumn(
-                        "資產佔比",
-                        width="small",
-                        format="%.2f%",
-                        min_value=0,
-                        max_value=1
-                    ),
-                },
-                use_container_width=True,
-                height=600
-            )
-            st.caption("💡 提示：如需查看已實現損益分析，請前往左側「📊 績效分析」頁面。")
+            format_dict = {
+                "庫存股數": "{:,.0f}", "平均成本": "{:,.2f}", "目前市價": "{:,.2f}",
+                "月線(20MA)": "{:,.2f}", "股票市值": "{:,.0f}", "未實現損益": "{:,.0f}", 
+                "報酬率 (%)": "{:,.2f}%", "佔總資產比例 (%)": "{:,.2f}%"
+            }
+            
+            st_df = df_unrealized[final_cols].style\
+                .format(format_dict)\
+                .map(style_tw_stock_profit_loss, subset=['未實現損益'])\
+                .map(highlight_severe_loss, subset=['報酬率 (%)'])
+                
+            st.dataframe(st_df, use_container_width=True, height=600)
+            
         else:
             st.info("目前沒有庫存。")
     else:
@@ -259,21 +256,16 @@ with tab2:
         df_display = df_raw.copy()
         df_display['交易日期'] = pd.to_datetime(df_display['交易日期']).dt.date
         
-        # [UI Optimization] 縮減流水帳欄寬
         st.dataframe(
             df_display.sort_values('交易日期', ascending=False),
             column_config={
-                "交易日期": st.column_config.DateColumn("日期", width="small", format="YYYY-MM-DD"),
-                "股票代號": st.column_config.TextColumn("代號", width="small"),
-                "股票名稱": st.column_config.TextColumn("名稱", width="small"),
-                "交易類別": st.column_config.TextColumn("類別", width="small"), # 買進/賣出很短
-                "股數": st.column_config.NumberColumn("股數", width="small", format="%d"),
-                "單價": st.column_config.NumberColumn("單價", width="small", format="$%.2f"),
-                "手續費": st.column_config.NumberColumn("手續費", width="small", format="$%d"),
-                "交易稅": st.column_config.NumberColumn("稅", width="small", format="$%d"),
-                "成交總金額": st.column_config.NumberColumn("總金額", width="medium", format="$%d"),
-                "淨收付金額": st.column_config.NumberColumn("淨收付", width="medium", format="$%d"),
-                "交易帳戶": st.column_config.TextColumn("帳戶", width="small"),
+                "交易日期": st.column_config.DateColumn("交易日期", format="YYYY-MM-DD"),
+                "股數": st.column_config.NumberColumn("股數", format="%d"),
+                "單價": st.column_config.NumberColumn("單價", format="$%.2f"),
+                "手續費": st.column_config.NumberColumn("手續費", format="$%d"),
+                "交易稅": st.column_config.NumberColumn("交易稅", format="$%d"),
+                "成交總金額": st.column_config.NumberColumn("成交總金額", format="$%d"),
+                "淨收付金額": st.column_config.NumberColumn("淨收付金額", format="$%d"),
             },
             use_container_width=True,
             hide_index=True
