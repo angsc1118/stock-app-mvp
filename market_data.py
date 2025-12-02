@@ -2,9 +2,8 @@
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位；10MA量改為張數
-# 2025-11-23: [Update] get_technical_analysis 增加回傳 debug_info (歷史資料末3筆)
-# 2025-11-23: [Fix] 修正 Vol10 計算邏輯 (排除當日、單位檢查)；加入除錯 Log
+# 2025-12-02 08:30:00: [Fix] 新增「昨收價回退機制 (Fallback)」。若盤前現價為0，自動使用 previousClose 計算市值。
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位
 # ==============================================================================
 
 import streamlit as st
@@ -14,39 +13,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 def get_price_from_fugle(symbol, api_key):
-    """單純取得價格"""
-    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
-    headers = {"X-API-KEY": api_key}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code != 200: return None
-        data = response.json()
-        last_price = None
-        if 'total' in data and data['total'].get('price') is not None: last_price = data['total']['price']
-        elif 'quote' in data and data['quote'].get('close') is not None: last_price = data['quote']['close']
-        elif 'trade' in data and data['trade'].get('price') is not None: last_price = data['trade']['price']
-        elif data.get('price') is not None: last_price = data['price']
-        if last_price is None: last_price = data.get('lastPrice', 0)
-        return float(last_price)
-    except: return None
-
-def get_realtime_prices(stock_list):
-    """批次取得價格"""
-    if "fugle_api_key" not in st.secrets: return {}
-    api_key = st.secrets["fugle_api_key"]
-    prices = {}
-    progress_bar = st.progress(0)
-    total = len(stock_list)
-    for i, symbol in enumerate(stock_list):
-        price = get_price_from_fugle(symbol, api_key)
-        if price is not None: prices[symbol] = price
-        progress_bar.progress((i + 1) / total)
-        time.sleep(0.1)
-    progress_bar.empty()
-    return prices
-
-def get_detailed_quote(symbol, api_key):
-    """取得詳細即時報價"""
+    """
+    單純取得價格 (用於計算資產總值)
+    修正邏輯：若現價為 0 (盤前/休市)，自動回退使用昨收價 (previousClose)
+    """
     url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
     headers = {"X-API-KEY": api_key}
     try:
@@ -54,12 +24,69 @@ def get_detailed_quote(symbol, api_key):
         if response.status_code != 200: return None
         data = response.json()
         
+        last_price = None
+        
+        # 1. 嘗試取得即時成交價
+        if 'total' in data and data['total'].get('price') is not None: last_price = data['total']['price']
+        elif 'quote' in data and data['quote'].get('close') is not None: last_price = data['quote']['close']
+        elif 'trade' in data and data['trade'].get('price') is not None: last_price = data['trade']['price']
+        elif data.get('price') is not None: last_price = data['price']
+        
+        # 若上述都沒抓到，嘗試 root level 的 lastPrice
+        if last_price is None or last_price == 0: 
+            last_price = data.get('lastPrice', 0)
+            
+        # 2. [關鍵修正] 昨收價回退機制 (Fallback)
+        # 如果現價仍為 0 (通常發生在盤前 08:30-09:00 或休市期間 API 歸零)
+        # 則讀取 previousClose 作為計算基準，避免資產歸零
+        if float(last_price) == 0:
+            previous_close = data.get('previousClose', 0)
+            if previous_close and float(previous_close) > 0:
+                return float(previous_close)
+                
+        return float(last_price)
+    except: return None
+
+def get_realtime_prices(stock_list):
+    """批次取得價格 (搭配 Progress Bar)"""
+    if "fugle_api_key" not in st.secrets: return {}
+    api_key = st.secrets["fugle_api_key"]
+    prices = {}
+    
+    # 建立進度條
+    progress_bar = st.progress(0)
+    total = len(stock_list)
+    
+    for i, symbol in enumerate(stock_list):
+        price = get_price_from_fugle(symbol, api_key)
+        if price is not None: prices[symbol] = price
+        # 更新進度
+        progress_bar.progress((i + 1) / total)
+        time.sleep(0.1) # 避免觸發 API Rate Limit
+        
+    progress_bar.empty()
+    return prices
+
+def get_detailed_quote(symbol, api_key):
+    """
+    取得詳細即時報價 (含漲跌幅、成交量)
+    修正邏輯：若現價為 0，使用昨收價，並將漲跌幅設為 0
+    """
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
+    headers = {"X-API-KEY": api_key}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code != 200: return None
+        data = response.json()
+        
+        # 1. 取得現價
         last_price = 0
         if 'total' in data: last_price = data['total'].get('price', 0)
         elif 'quote' in data: last_price = data['quote'].get('close', 0)
         elif 'trade' in data: last_price = data['trade'].get('price', 0)
         if last_price == 0: last_price = data.get('lastPrice', 0)
         
+        # 2. 取得漲跌幅與成交量
         change_percent = 0
         if 'quote' in data: change_percent = data['quote'].get('changePercent', 0)
         elif 'changePercent' in data: change_percent = data['changePercent']
@@ -67,6 +94,14 @@ def get_detailed_quote(symbol, api_key):
         volume = 0
         if 'total' in data: volume = data['total'].get('tradeVolume', 0)
         elif 'trade' in data: volume = data['trade'].get('volume', 0)
+        
+        # 3. [關鍵修正] 昨收價回退機制 (Fallback)
+        # 若現價為 0，改用 previousClose，並強制將漲跌幅設為 0 (代表尚未開盤)
+        if float(last_price) == 0:
+            previous_close = data.get('previousClose', 0)
+            if previous_close and float(previous_close) > 0:
+                last_price = previous_close
+                change_percent = 0.0 # 使用昨收價時，當日漲跌幅應視為 0
         
         return {
             "price": float(last_price),
@@ -77,6 +112,7 @@ def get_detailed_quote(symbol, api_key):
     except: return None
 
 def get_batch_detailed_quotes(stock_list):
+    """批次取得詳細報價 (用於盤中監控)"""
     if "fugle_api_key" not in st.secrets: return {}
     api_key = st.secrets["fugle_api_key"]
     results = {}
@@ -86,11 +122,10 @@ def get_batch_detailed_quotes(stock_list):
         time.sleep(0.1)
     return results
 
-# --- [修改] 技術分析 (回傳 debug_info) ---
 def get_technical_analysis(symbol, api_key):
     """
     抓取歷史資料並計算技術指標
-    修正：排除今日盤中資料計算均量
+    修正：排除今日盤中資料計算均量 (維持原邏輯)
     """
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
@@ -115,7 +150,7 @@ def get_technical_analysis(symbol, api_key):
         debug_info = last_3_rows.to_dict('records') 
         # ---------------------
 
-        # 1. 排除今日資料
+        # 1. 排除今日資料 (避免盤中波動影響歷史均線計算)
         today_str = datetime.now().strftime('%Y-%m-%d')
         last_date_str = df.iloc[-1]['date'].strftime('%Y-%m-%d')
         
