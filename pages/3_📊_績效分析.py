@@ -117,10 +117,16 @@ else:
                 fig_s.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
                 fig_s.update_layout(showlegend=False, yaxis_title=None, xaxis=dict(tickformat=",.0f"), height=h)
                 st.plotly_chart(fig_s, use_container_width=True)
-
             # --- C. 詳細表格 ---
             st.subheader("📜 詳細交易清單")
             with st.expander("展開查看詳細數據", expanded=True):
+                # 這裡若要像 Page 2 一樣套用背景色，需重構 Logic 層回傳格式
+                # 目前先針對寬度進行優化
+                
+                # 為了 Styler 能判斷正負顏色，我們需要原始數值
+                # 但這裡為了簡化，先使用 column_config 控制寬度即可
+                # 因為上面的 style_tw_stock_profit_loss 已經處理了文字顏色
+                
                 st.dataframe(
                     df_filtered_view[['交易日期', '股票', '交易類別', '已實現損益', '報酬率 (%)', '本金(成本)']]
                     .style.format({
@@ -129,7 +135,17 @@ else:
                         "報酬率 (%)": "{:,.2f}%"
                     })
                     .map(style_tw_stock_profit_loss, subset=['已實現損益', '報酬率 (%)']),
+                    
+                    column_config={
+                        "交易日期": st.column_config.DateColumn("日期", width="small"),
+                        "股票": st.column_config.TextColumn("股票", width="medium"),
+                        "交易類別": st.column_config.TextColumn("類別", width="small"),
+                        "已實現損益": st.column_config.NumberColumn("損益", width="small"),
+                        "報酬率 (%)": st.column_config.NumberColumn("報酬率", width="small"),
+                        "本金(成本)": st.column_config.NumberColumn("本金", width="small"),
+                    },
                     use_container_width=True
                 )
+
         else:
             st.info(f"{selected_year} 年度無已實現損益資料。")
