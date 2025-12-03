@@ -2,6 +2,7 @@
 # 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
+# 2025-12-03 09:50:00: [Feat] 實作「庫存自動注入」：自動將庫存帶入自選股編輯器
 # 2025-11-27 14:50:00: [Feat] 新增「自選股管理」編輯器 (st.data_editor)
 # 2025-11-27 14:30:00: [UI] 優化告警顯示，改用 Expander 彙整並預設收合
 # ==============================================================================
@@ -20,45 +21,84 @@ st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
 st.title("🚀 盤中戰情監控")
 
 # ==============================================================================
-# 1. 資料準備與自選股管理 (UI Update)
+# 1. 資料準備
 # ==============================================================================
 
-# 讀取庫存
+# 讀取庫存 (包含代號與名稱，用於自動注入)
 try:
     df_txn = database.load_data()
     df_fifo = logic.calculate_fifo_report(df_txn)
-    inventory_stocks = df_fifo['股票代號'].unique().tolist() if not df_fifo.empty else []
+    # 取得庫存清單 (List of Dicts: [{'股票代號': '2330', '股票名稱': '台積電'}, ...])
+    if not df_fifo.empty:
+        inventory_data = df_fifo[['股票代號', '股票名稱']].drop_duplicates().to_dict('records')
+        inventory_stocks_list = df_fifo['股票代號'].unique().tolist()
+    else:
+        inventory_data = []
+        inventory_stocks_list = []
 except:
-    inventory_stocks = []
+    inventory_data = []
+    inventory_stocks_list = []
 
-# --- [New] 自選股管理區塊 ---
+# ==============================================================================
+# 2. 自選股管理區塊 (含庫存自動注入邏輯)
+# ==============================================================================
 with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", expanded=False):
-    st.caption("💡 操作說明：直接在下方表格修改。新增請點最後一列；刪除請選取列後按 Delete。完成後請務必點擊「💾 儲存變更」。")
+    st.caption("💡 操作說明：系統會**自動帶入庫存股票**。請直接修改下方表格設定警示價，並務必點擊「💾 儲存變更」。")
     
-    # 讀取現有清單
+    # A. 讀取現有自選股清單
     try:
         current_watchlist = database.load_watchlist()
     except:
         current_watchlist = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
 
-    # 確保欄位順序與型態
+    # 確保欄位順序
     column_order = ['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註']
-    # 補齊缺漏欄位
     for col in column_order:
-        if col not in current_watchlist.columns: current_watchlist[col] = ""
+        if col not in current_watchlist.columns: 
+            current_watchlist[col] = ""
 
-    # 2. [關鍵修正] 強制轉型資料型態，避免 st.data_editor 報錯
-    # 將文字欄位強制轉為字串 (避免 2330 被當成數字)
+    # B. [關鍵功能] 庫存自動注入邏輯 (Auto-Injection)
+    # 1. 取得目前自選股已有的代號 (轉字串比對)
+    existing_symbols = set(current_watchlist['股票代號'].astype(str).str.strip().tolist())
+    
+    # 2. 找出「有庫存」但「不在自選股」的股票
+    new_rows = []
+    for item in inventory_data:
+        symbol = str(item['股票代號']).strip()
+        name = str(item['股票名稱']).strip()
+        
+        if symbol not in existing_symbols and symbol != "":
+            new_rows.append({
+                '群組': '庫存', # 自動標記為庫存
+                '股票代號': symbol,
+                '股票名稱': name,
+                '警示價_高': '', # 留空讓使用者填
+                '警示價_低': '',
+                '備註': '自動帶入'
+            })
+    
+    # 3. 若有新股票，合併到 DataFrame
+    if new_rows:
+        df_new = pd.DataFrame(new_rows)
+        # 確保新資料的欄位齊全
+        for col in column_order:
+            if col not in df_new.columns: df_new[col] = ""
+        
+        current_watchlist = pd.concat([current_watchlist, df_new], ignore_index=True)
+        st.info(f"✨ 已自動將 {len(new_rows)} 檔庫存股票帶入下方列表，請設定警示價。", icon="🤖")
+
+    # C. 資料型態強制轉換 (避免 st.data_editor 報錯)
+    # 文字欄位 -> 字串
     text_cols = ['群組', '股票代號', '股票名稱', '備註']
     for col in text_cols:
         current_watchlist[col] = current_watchlist[col].astype(str).replace('nan', '')
 
-    # 將數值欄位強制轉為數字 (將空字串或錯誤格式轉為 NaN，Streamlit 才能接受)
+    # 數值欄位 -> 浮點數 (錯誤轉 NaN)
     num_cols = ['警示價_高', '警示價_低']
     for col in num_cols:
         current_watchlist[col] = pd.to_numeric(current_watchlist[col], errors='coerce')
-    
-    # 顯示編輯器
+
+    # D. 顯示編輯器
     edited_watchlist = st.data_editor(
         current_watchlist[column_order],
         num_rows="dynamic",
@@ -66,39 +106,39 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
         column_config={
             "群組": st.column_config.SelectboxColumn(
                 "群組",
-                options=["自選", "觀察", "短線", "長線", "動能" , "大戶" , "產業班" ], 
+                options=["庫存", "自選", "觀察", "短線", "長線", "動能", "大戶", "產業班"], 
                 required=True
             ),
             "股票代號": st.column_config.TextColumn("股票代號", required=True, validate="^[0-9A-Za-z]+$"),
+            "股票名稱": st.column_config.TextColumn("股票名稱", required=True),
             "警示價_高": st.column_config.NumberColumn("警示價_高 (突破)", min_value=0, step=0.1, format="%.2f"),
             "警示價_低": st.column_config.NumberColumn("警示價_低 (跌破)", min_value=0, step=0.1, format="%.2f"),
+            "備註": st.column_config.TextColumn("備註"),
         },
         key="watchlist_editor"
     )
 
-    # 儲存按鈕
+    # E. 儲存按鈕
     if st.button("💾 儲存變更至資料庫", type="primary"):
         try:
             database.save_watchlist(edited_watchlist)
-            st.toast("✅ 自選股清單已更新！", icon="💾")
-            time.sleep(1) # 讓使用者看到訊息
-            st.rerun() # 重新整理以更新下方監控表
+            st.toast("✅ 自選股清單已更新！(含自動帶入的庫存)", icon="💾")
+            time.sleep(1) 
+            st.rerun() 
         except Exception as e:
             st.error(f"儲存失敗: {e}")
 
 # ==============================================================================
-# 2. 重新整理後的資料讀取 (用於下方監控)
+# 3. 重新整理後的資料讀取 (用於下方監控)
 # ==============================================================================
-# 為了確保下方監控使用的是最新(可能剛存好)的資料，我們再讀一次
-# 雖然上面 database.save_watchlist 已經清過 cache，但變數 scope 的關係，這裡重新整理變數比較保險
 
 try:
     df_watch = database.load_watchlist()
+    # 處理資料
     if not df_watch.empty and '股票代號' in df_watch.columns:
         df_watch['股票代號'] = df_watch['股票代號'].astype(str).str.strip()
         groups = ["全部", "庫存持股"]
         if '群組' in df_watch.columns: 
-            # 排除空值
             valid_groups = [g for g in df_watch['群組'].unique().tolist() if g]
             groups += valid_groups
         groups = list(set(groups))
@@ -116,7 +156,7 @@ except:
     df_mp = pd.DataFrame()
 
 # ==============================================================================
-# 3. 側邊欄設定
+# 4. 側邊欄設定
 # ==============================================================================
 with st.sidebar:
     st.header("⚙️ 監控設定")
@@ -136,7 +176,7 @@ with st.sidebar:
     """)
 
 # ==============================================================================
-# 4. 核心監控邏輯 (Fragment)
+# 5. 核心監控邏輯 (Fragment)
 # ==============================================================================
 
 @st.fragment(run_every=30 if auto_refresh else None)
@@ -146,6 +186,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     target_stocks = []
     if selected_group == "全部":
         watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
+        # 合併去重
         target_stocks = list(set(inventory_list + watch_list))
     elif selected_group == "庫存持股":
         target_stocks = inventory_list
@@ -154,13 +195,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             target_stocks = df_watch[df_watch['群組'] == selected_group]['股票代號'].tolist()
     
     if not target_stocks:
-        st.info("此群組無股票可監控。請至上方「⚙️ 管理自選股清單」新增股票。")
+        st.info("此群組無股票可監控。")
         return
 
     # 2. 抓取資料 (即時報價 + 技術指標)
     try:
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
-        # 從 Session 讀取 TA 資料
         ta_data = st.session_state.get("ta_data", {})
     except Exception as e:
         st.error(f"資料抓取失敗: {e}")
@@ -177,8 +217,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     table_rows = []
     alerts_data = [] 
     
-    debug_ta_list = []      # 原有的 TA Debug
-    debug_calc_list = []    # 量比計算 Debug
+    debug_ta_list = []      
+    debug_calc_list = []    
     
     # 檢查是否有 TA 資料
     if not ta_data:
@@ -188,45 +228,31 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         quote = quotes.get(symbol, {})
         price = quote.get('price', 0)
         chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0) # 盤中量 (張)
+        vol = quote.get('volume', 0) 
         
         # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
         bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0) # 10日均量 (張)
+        vol_10ma = ta.get('Vol10', 0) 
         
-        # 收集 TA Debug 資訊
+        # Debug 資訊
         if 'debug_info' in ta:
-            debug_ta_list.append({
-                '股票代號': symbol,
-                '10日均量(Vol10)': vol_10ma,
-                '歷史資料(末3筆)': ta['debug_info']
-            })
+            debug_ta_list.append({'股票代號': symbol, '10日均量(Vol10)': vol_10ma, '歷史資料(末3筆)': ta['debug_info']})
         
         # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
 
-        # 收集 Calculation Debug 資訊
-        debug_calc_list.append({
-            '股票代號': symbol,
-            '現量 (Vol)': vol,
-            '倍數 (Mult)': multiplier,
-            '預估量 (Est)': est_vol,
-            '10日均量 (MA10)': vol_10ma,
-            '量比 (Ratio)': vol_ratio
-        })
+        # Debug 資訊
+        debug_calc_list.append({'股票代號': symbol, '現量 (Vol)': vol, '倍數 (Mult)': multiplier, '預估量 (Est)': est_vol, '10日均量 (MA10)': vol_10ma, '量比 (Ratio)': vol_ratio})
 
-        # 取得基本資料 (優先使用自選股設定的名稱/警示價)
+        # 取得基本資料 (優先使用自選股設定)
         name = ""
         high_limit = 0
         low_limit = 0
         
-        # 從 df_watch 查找該股票的設定
-        # 注意: 可能有多筆 (不同群組)，這裡取第一筆或邏輯上的合併
         watch_info = df_watch[df_watch['股票代號'] == symbol]
-        
         if not watch_info.empty:
             name = watch_info.iloc[0]['股票名稱']
             try: high_limit = float(watch_info.iloc[0]['警示價_高'])
@@ -240,7 +266,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
 
         # 警示判斷
         status_icon = ""
-        stock_alerts = [] # [New] 該股的專屬警示列表
+        stock_alerts = [] 
         
         # A. 價格警示
         if high_limit > 0 and price >= high_limit:
@@ -264,21 +290,16 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_alerts.append(f"⚠️ 乖離過大 (BIAS {bias:.2f}%)")
             status_icon += "⚠️"
         
-        # [New] 彙整警示
+        # 彙整警示
         if stock_alerts:
             alerts_data.append({"symbol": symbol, "name": name, "msgs": stock_alerts})
         
-        # 格式化處理
+        # 格式化
         price_str = f"{price:,.2f}"
-        
-        # 漲跌幅
         chg_str = f"{chg*100:.2f}%" if abs(chg) < 1 else f"{chg:.2f}%"
-
-        # 成交量
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
         
-        # 10MA 量顯示邏輯
         if vol_10ma > 0:
             vol_10ma_lots = math.ceil(vol_10ma / 1000)
             vol_10ma_str = f"{vol_10ma_lots:,}"
@@ -288,7 +309,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
                 vol_ratio_str = f"{vol_ratio:.2f}"
         else:
             vol_10ma_str = "N/A"
-            vol_ratio_str = "-" # 無法計算
+            vol_ratio_str = "-" 
 
         table_rows.append({
             "代號": symbol,
@@ -307,12 +328,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     # 5. 顯示內容
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 量能倍數: {multiplier}")
 
-    # [UI Optimization] 改用 Expander 顯示彙整的警示訊息
     if alerts_data:
         count = len(alerts_data)
         with st.expander(f"⚠️ 共有 {count} 檔股票出現異常/告警 (點擊展開查看)", expanded=False):
             for item in alerts_data:
-                # 組合訊息
                 msgs_str = " | ".join(item['msgs'])
                 st.markdown(f"**{item['name']} ({item['symbol']})**: {msgs_str}")
     
@@ -338,40 +357,27 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             hide_index=True
         )
         
-        # 手動更新 TA 按鈕
         if st.button("🔄 更新技術指標 (均線/均量)"):
             with st.spinner("計算技術指標中 (抓取歷史K線)..."):
                 new_ta = market_data.get_batch_technical_analysis(target_stocks)
-                # 更新 session
                 current_ta = st.session_state.get("ta_data", {})
                 current_ta.update(new_ta)
                 st.session_state["ta_data"] = current_ta
                 st.rerun()
                 
-        # 除錯資訊區塊
         with st.expander("🛠️ 除錯資訊 (量比計算來源)"):
             st.info("若量比顯示 0.00，請檢查「現量」或「倍數」是否為 0。若 10日均量 為 N/A，請按上方更新按鈕。")
-            
             tab_debug1, tab_debug2 = st.tabs(["🔢 量比計算參數明細", "📊 歷史資料 (Vol10來源)"])
-            
-            with tab_debug1:
-                st.dataframe(pd.DataFrame(debug_calc_list), use_container_width=True)
-                
-            with tab_debug2:
+            with tab_debug1: st.dataframe(pd.DataFrame(debug_calc_list), use_container_width=True)
+            with tab_debug2: 
                 st.markdown("API 抓取到的**歷史 K 線末 3 筆資料** (檢查是否包含今日導致均量失真)：")
                 st.write(debug_ta_list)
 
 # ==============================================================================
-# 5. 執行渲染
+# 6. 執行渲染
 # ==============================================================================
 
-if not groups:
-    # 這裡的邏輯修正：即便一開始沒有 group，也會因為上面 load_watchlist 產生的空 dataframe 而允許進入
-    # 但為了保險，我們檢查是否 inventory 也空
-    if not inventory_stocks and df_watch.empty:
-        st.warning("無法讀取「自選股清單」且無庫存。請嘗試使用上方編輯器新增自選股。")
-        render_monitor_table("全部", inventory_stocks, df_watch, df_mp)
-    else:
-        render_monitor_table(selected_group, inventory_stocks, df_watch, df_mp)
+if not groups and not inventory_stocks_list:
+    st.warning("目前無自選股設定也無庫存。請使用上方編輯器新增股票。")
 else:
-    render_monitor_table(selected_group, inventory_stocks, df_watch, df_mp)
+    render_monitor_table(selected_group, inventory_stocks_list, df_watch, df_mp)
