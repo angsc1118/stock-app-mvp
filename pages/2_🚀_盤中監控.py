@@ -2,8 +2,9 @@
 # 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
-# 2025-12-03 13:00:00: [Fix] 修正漲跌幅顯示異常。確認 API 回傳為百分比數值，移除 *100 的邏輯。
-# 2025-12-03 09:50:00: [Feat] 實作「庫存自動注入」：自動將庫存帶入自選股編輯器
+# 2025-12-03 13:55:00: [UI] 優化表格排序，預設依照「量比」由大至小 (降序) 排列
+# 2025-12-03 13:00:00: [Fix] 修正漲跌幅顯示異常
+# 2025-12-03 09:50:00: [Feat] 實作「庫存自動注入」
 # ==============================================================================
 
 import streamlit as st
@@ -55,7 +56,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
         if col not in current_watchlist.columns: 
             current_watchlist[col] = ""
 
-    # B. [關鍵功能] 庫存自動注入邏輯 (Auto-Injection)
+    # B. 庫存自動注入邏輯 (Auto-Injection)
     existing_symbols = set(current_watchlist['股票代號'].astype(str).str.strip().tolist())
     
     new_rows = []
@@ -236,7 +237,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         # Debug
         debug_calc_list.append({'股票代號': symbol, '現量 (Vol)': vol, '倍數 (Mult)': multiplier, '預估量 (Est)': est_vol, '10日均量 (MA10)': vol_10ma, '量比 (Ratio)': vol_ratio})
 
-        # 取得基本資料
+        # 取得基本資料 (優先使用自選股設定)
         name = ""
         high_limit = 0
         low_limit = 0
@@ -285,12 +286,7 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         
         # 格式化
         price_str = f"{price:,.2f}"
-        
-        # [Fix] 漲跌幅格式修正：
-        # 已確認 API 回傳的是百分比數值 (如 2.10 代表 2.10%)
-        # 因此不再需要 * 100，直接顯示即可
         chg_str = f"{chg:.2f}%"
-
         vol_str = f"{vol:,}"
         est_vol_str = f"{est_vol:,}"
         
@@ -305,6 +301,10 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             vol_10ma_str = "N/A"
             vol_ratio_str = "-" 
 
+        # [關鍵修改] 加入隱藏欄位 _sort_ratio 用於排序
+        # 若無法計算 (N/A) 則設為 -1，排在最後
+        sort_val = vol_ratio if vol_10ma > 0 else -1.0
+
         table_rows.append({
             "代號": symbol,
             "名稱": name,
@@ -316,7 +316,8 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             "量比": vol_ratio_str,
             "月線乖離率": f"{bias:.2f}%",
             "技術訊號": signal,
-            "警示": status_icon
+            "警示": status_icon,
+            "_sort_ratio": sort_val # 隱藏排序用
         })
 
     # 5. 顯示內容
@@ -332,6 +333,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     if table_rows:
         df_display = pd.DataFrame(table_rows)
         
+        # [關鍵修改] 依照量比 (_sort_ratio) 降序排列 (大 -> 小)
+        df_display = df_display.sort_values(by="_sort_ratio", ascending=False)
+        
+        # 排序後移除輔助欄位，避免顯示在 UI
+        df_display = df_display.drop(columns=["_sort_ratio"])
+
         st.dataframe(
             df_display,
             column_config={
