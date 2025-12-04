@@ -1,384 +1,229 @@
 # ==============================================================================
-# 檔案名稱: pages/2_🚀_盤中監控.py
+# 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-12-03 13:55:00: [UI] 優化表格排序，預設依照「量比」由大至小 (降序) 排列
-# 2025-12-03 13:00:00: [Fix] 修正漲跌幅顯示異常
-# 2025-12-03 09:50:00: [Feat] 實作「庫存自動注入」
+# 2025-12-03 14:10:00: [Feat] 新增「月線趨勢判斷」：比較末兩日 MA20 判斷翻揚(⤴️)或下彎(⤵️)
+# 2025-12-02 08:30:00: [Fix] 新增「昨收價回退機制 (Fallback)」
+# 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位
 # ==============================================================================
 
 import streamlit as st
-import pandas as pd
+import requests
 import time
-import math
+import pandas as pd
 from datetime import datetime, timedelta
 
-import database
-import logic
-import market_data
-
-st.set_page_config(page_title="盤中監控", layout="wide", page_icon="🚀")
-st.title("🚀 盤中戰情監控")
-
-# ==============================================================================
-# 1. 資料準備
-# ==============================================================================
-
-# 讀取庫存 (包含代號與名稱，用於自動注入)
-try:
-    df_txn = database.load_data()
-    df_fifo = logic.calculate_fifo_report(df_txn)
-    if not df_fifo.empty:
-        inventory_data = df_fifo[['股票代號', '股票名稱']].drop_duplicates().to_dict('records')
-        inventory_stocks_list = df_fifo['股票代號'].unique().tolist()
-    else:
-        inventory_data = []
-        inventory_stocks_list = []
-except:
-    inventory_data = []
-    inventory_stocks_list = []
-
-# ==============================================================================
-# 2. 自選股管理區塊 (含庫存自動注入邏輯)
-# ==============================================================================
-with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", expanded=False):
-    st.caption("💡 操作說明：系統會**自動帶入庫存股票**。請直接修改下方表格設定警示價，並務必點擊「💾 儲存變更」。")
-    
-    # A. 讀取現有自選股清單
+def get_price_from_fugle(symbol, api_key):
+    """
+    單純取得價格 (用於計算資產總值)
+    修正邏輯：若現價為 0 (盤前/休市)，自動回退使用昨收價 (previousClose)
+    """
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
+    headers = {"X-API-KEY": api_key}
     try:
-        current_watchlist = database.load_watchlist()
-    except:
-        current_watchlist = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
-
-    # 確保欄位順序
-    column_order = ['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註']
-    for col in column_order:
-        if col not in current_watchlist.columns: 
-            current_watchlist[col] = ""
-
-    # B. 庫存自動注入邏輯 (Auto-Injection)
-    existing_symbols = set(current_watchlist['股票代號'].astype(str).str.strip().tolist())
-    
-    new_rows = []
-    for item in inventory_data:
-        symbol = str(item['股票代號']).strip()
-        name = str(item['股票名稱']).strip()
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code != 200: return None
+        data = response.json()
         
-        if symbol not in existing_symbols and symbol != "":
-            new_rows.append({
-                '群組': '庫存', 
-                '股票代號': symbol,
-                '股票名稱': name,
-                '警示價_高': '', 
-                '警示價_低': '',
-                '備註': '自動帶入'
-            })
-    
-    if new_rows:
-        df_new = pd.DataFrame(new_rows)
-        for col in column_order:
-            if col not in df_new.columns: df_new[col] = ""
+        last_price = None
         
-        current_watchlist = pd.concat([current_watchlist, df_new], ignore_index=True)
-        st.info(f"✨ 已自動將 {len(new_rows)} 檔庫存股票帶入下方列表，請設定警示價。", icon="🤖")
-
-    # C. 資料型態強制轉換
-    text_cols = ['群組', '股票代號', '股票名稱', '備註']
-    for col in text_cols:
-        current_watchlist[col] = current_watchlist[col].astype(str).replace('nan', '')
-
-    num_cols = ['警示價_高', '警示價_低']
-    for col in num_cols:
-        current_watchlist[col] = pd.to_numeric(current_watchlist[col], errors='coerce')
-
-    # D. 顯示編輯器
-    edited_watchlist = st.data_editor(
-        current_watchlist[column_order],
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "群組": st.column_config.SelectboxColumn(
-                "群組",
-                options=["庫存", "自選", "觀察", "短線", "長線", "動能", "大戶", "產業班"], 
-                required=True
-            ),
-            "股票代號": st.column_config.TextColumn("股票代號", required=True, validate="^[0-9A-Za-z]+$"),
-            "股票名稱": st.column_config.TextColumn("股票名稱", required=True),
-            "警示價_高": st.column_config.NumberColumn("警示價_高 (突破)", min_value=0, step=0.1, format="%.2f"),
-            "警示價_低": st.column_config.NumberColumn("警示價_低 (跌破)", min_value=0, step=0.1, format="%.2f"),
-            "備註": st.column_config.TextColumn("備註"),
-        },
-        key="watchlist_editor"
-    )
-
-    # E. 儲存按鈕
-    if st.button("💾 儲存變更至資料庫", type="primary"):
-        try:
-            database.save_watchlist(edited_watchlist)
-            st.toast("✅ 自選股清單已更新！", icon="💾")
-            time.sleep(1) 
-            st.rerun() 
-        except Exception as e:
-            st.error(f"儲存失敗: {e}")
-
-# ==============================================================================
-# 3. 重新整理後的資料讀取 (用於下方監控)
-# ==============================================================================
-
-try:
-    df_watch = database.load_watchlist()
-    if not df_watch.empty and '股票代號' in df_watch.columns:
-        df_watch['股票代號'] = df_watch['股票代號'].astype(str).str.strip()
-        groups = ["全部", "庫存持股"]
-        if '群組' in df_watch.columns: 
-            valid_groups = [g for g in df_watch['群組'].unique().tolist() if g]
-            groups += valid_groups
-        groups = list(set(groups))
-        groups.sort()
-    else:
-        groups = ["全部", "庫存持股"]
-        df_watch = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
-except:
-    groups = ["全部", "庫存持股"]
-    df_watch = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
-
-try:
-    df_mp = database.load_mp_table()
-except:
-    df_mp = pd.DataFrame()
-
-# ==============================================================================
-# 4. 側邊欄設定
-# ==============================================================================
-with st.sidebar:
-    st.header("⚙️ 監控設定")
-    selected_group = st.selectbox("選擇監控群組", groups)
-    
-    auto_refresh = st.toggle("啟用自動刷新 (30秒)", value=False)
-    st.caption("⚠️ 注意：頻繁刷新會消耗 API 額度")
-    
-    st.divider()
-    st.markdown("### 💡 警示圖示說明")
-    st.markdown("""
-    - 🔥 **爆量**: 量比 > 2.0
-    - 🟢 **增量**: 量比 > 1.5
-    - 🔴 **突破**: 現價 >= 高
-    - 📉 **跌破**: 現價 <= 低
-    - ⚠️ **乖離**: > 20%
-    """)
-
-# ==============================================================================
-# 5. 核心監控邏輯 (Fragment)
-# ==============================================================================
-
-@st.fragment(run_every=30 if auto_refresh else None)
-def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
-    
-    # 1. 決定要監控的股票清單
-    target_stocks = []
-    if selected_group == "全部":
-        watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
-        target_stocks = list(set(inventory_list + watch_list))
-    elif selected_group == "庫存持股":
-        target_stocks = inventory_list
-    else:
-        if not df_watch.empty:
-            target_stocks = df_watch[df_watch['群組'] == selected_group]['股票代號'].tolist()
-    
-    if not target_stocks:
-        st.info("此群組無股票可監控。")
-        return
-
-    # 2. 抓取資料 (即時報價 + 技術指標)
-    try:
-        quotes = market_data.get_batch_detailed_quotes(target_stocks)
-        ta_data = st.session_state.get("ta_data", {})
-    except Exception as e:
-        st.error(f"資料抓取失敗: {e}")
-        return
-
-    # 3. 取得當前時間與倍數 (使用台灣時間)
-    tw_now = datetime.utcnow() + timedelta(hours=8)
-    current_time_str = tw_now.strftime("%H:%M")
-    
-    # 查表取得 multiplier
-    multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
-
-    # 4. 組裝表格資料
-    table_rows = []
-    alerts_data = [] 
-    
-    debug_ta_list = []      
-    debug_calc_list = []    
-    
-    if not ta_data:
-        st.warning("⚠️ 尚未取得「10日均量」資料，量比無法計算。請點擊下方「🔄 更新技術指標」按鈕。")
-
-    for symbol in target_stocks:
-        quote = quotes.get(symbol, {})
-        price = quote.get('price', 0)
-        chg = quote.get('change_pct', 0)
-        vol = quote.get('volume', 0) 
+        # 1. 嘗試取得即時成交價
+        if 'total' in data and data['total'].get('price') is not None: last_price = data['total']['price']
+        elif 'quote' in data and data['quote'].get('close') is not None: last_price = data['quote']['close']
+        elif 'trade' in data and data['trade'].get('price') is not None: last_price = data['trade']['price']
+        elif data.get('price') is not None: last_price = data['price']
         
-        # TA 資料
-        ta = ta_data.get(symbol, {})
-        signal = ta.get('Signal', '-')
-        ma20 = ta.get('MA20', 0)
-        bias = ta.get('Bias', 0)
-        vol_10ma = ta.get('Vol10', 0) 
-        
-        # Debug
-        if 'debug_info' in ta:
-            debug_ta_list.append({'股票代號': symbol, '10日均量(Vol10)': vol_10ma, '歷史資料(末3筆)': ta['debug_info']})
-        
-        # 計算動能
-        est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
-
-        # Debug
-        debug_calc_list.append({'股票代號': symbol, '現量 (Vol)': vol, '倍數 (Mult)': multiplier, '預估量 (Est)': est_vol, '10日均量 (MA10)': vol_10ma, '量比 (Ratio)': vol_ratio})
-
-        # 取得基本資料 (優先使用自選股設定)
-        name = ""
-        high_limit = 0
-        low_limit = 0
-        
-        watch_info = df_watch[df_watch['股票代號'] == symbol]
-        if not watch_info.empty:
-            name = watch_info.iloc[0]['股票名稱']
-            try: high_limit = float(watch_info.iloc[0]['警示價_高'])
-            except: high_limit = 0
-            try: low_limit = float(watch_info.iloc[0]['警示價_低'])
-            except: low_limit = 0
-        
-        if not name:
-            stock_map = database.get_stock_info_map()
-            name = stock_map.get(symbol, symbol)
-
-        # 警示判斷
-        status_icon = ""
-        stock_alerts = [] 
-        
-        # A. 價格警示
-        if high_limit > 0 and price >= high_limit:
-            msg = f"🔴 突破目標價 {high_limit} (現價 {price})"
-            stock_alerts.append(msg)
-            status_icon += "🔴"
-        if low_limit > 0 and price > 0 and price <= low_limit:
-            msg = f"📉 跌破支撐價 {low_limit} (現價 {price})"
-            stock_alerts.append(msg)
-            status_icon += "📉"
+        # 若上述都沒抓到，嘗試 root level 的 lastPrice
+        if last_price is None or last_price == 0: 
+            last_price = data.get('lastPrice', 0)
             
-        # B. 動能警示
-        if vol_ratio > 2.0: 
-            stock_alerts.append(f"🔥 爆量 (量比 {vol_ratio:.2f})")
-            status_icon += "🔥"
-        elif vol_ratio > 1.5: 
-            status_icon += "🟢"
-            
-        # C. 技術警示
-        if bias > 20: 
-            stock_alerts.append(f"⚠️ 乖離過大 (BIAS {bias:.2f}%)")
-            status_icon += "⚠️"
-        
-        # 彙整警示
-        if stock_alerts:
-            alerts_data.append({"symbol": symbol, "name": name, "msgs": stock_alerts})
-        
-        # 格式化
-        price_str = f"{price:,.2f}"
-        chg_str = f"{chg:.2f}%"
-        vol_str = f"{vol:,}"
-        est_vol_str = f"{est_vol:,}"
-        
-        if vol_10ma > 0:
-            vol_10ma_lots = math.ceil(vol_10ma / 1000)
-            vol_10ma_str = f"{vol_10ma_lots:,}"
-            if vol == 0:
-                vol_ratio_str = "0.00 (無量)"
-            else:
-                vol_ratio_str = f"{vol_ratio:.2f}"
-        else:
-            vol_10ma_str = "N/A"
-            vol_ratio_str = "-" 
-
-        # [關鍵修改] 加入隱藏欄位 _sort_ratio 用於排序
-        # 若無法計算 (N/A) 則設為 -1，排在最後
-        sort_val = vol_ratio if vol_10ma > 0 else -1.0
-
-        table_rows.append({
-            "代號": symbol,
-            "名稱": name,
-            "現價": price_str,
-            "漲跌幅": chg_str,
-            "成交量": vol_str,
-            "預估量": est_vol_str,
-            "10日均量": vol_10ma_str,
-            "量比": vol_ratio_str,
-            "月線乖離率": f"{bias:.2f}%",
-            "技術訊號": signal,
-            "警示": status_icon,
-            "_sort_ratio": sort_val # 隱藏排序用
-        })
-
-    # 5. 顯示內容
-    st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 量能倍數: {multiplier}")
-
-    if alerts_data:
-        count = len(alerts_data)
-        with st.expander(f"⚠️ 共有 {count} 檔股票出現異常/告警 (點擊展開查看)", expanded=False):
-            for item in alerts_data:
-                msgs_str = " | ".join(item['msgs'])
-                st.markdown(f"**{item['name']} ({item['symbol']})**: {msgs_str}")
-    
-    if table_rows:
-        df_display = pd.DataFrame(table_rows)
-        
-        # [關鍵修改] 依照量比 (_sort_ratio) 降序排列 (大 -> 小)
-        df_display = df_display.sort_values(by="_sort_ratio", ascending=False)
-        
-        # 排序後移除輔助欄位，避免顯示在 UI
-        df_display = df_display.drop(columns=["_sort_ratio"])
-
-        st.dataframe(
-            df_display,
-            column_config={
-                "代號": st.column_config.TextColumn("代號", width="small"),
-                "名稱": st.column_config.TextColumn("名稱", width="small"),
-                "現價": st.column_config.TextColumn("現價", width="small"),
-                "漲跌幅": st.column_config.TextColumn("漲跌幅", width="small"),
-                "成交量": st.column_config.TextColumn("現量", width="small"),
-                "預估量": st.column_config.TextColumn("預估量", width="small"),
-                "10日均量": st.column_config.TextColumn("10日均量", width="small"),
-                "量比": st.column_config.TextColumn("量比", width="small"),
-                "月線乖離率": st.column_config.TextColumn("月線乖離率", width="small"),
-                "技術訊號": st.column_config.TextColumn("技術訊號", width="medium"),
-                "警示": st.column_config.TextColumn("警示", width="small"),
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        if st.button("🔄 更新技術指標 (均線/均量)"):
-            with st.spinner("計算技術指標中 (抓取歷史K線)..."):
-                new_ta = market_data.get_batch_technical_analysis(target_stocks)
-                current_ta = st.session_state.get("ta_data", {})
-                current_ta.update(new_ta)
-                st.session_state["ta_data"] = current_ta
-                st.rerun()
+        # 2. 昨收價回退機制 (Fallback)
+        if float(last_price) == 0:
+            previous_close = data.get('previousClose', 0)
+            if previous_close and float(previous_close) > 0:
+                return float(previous_close)
                 
-        with st.expander("🛠️ 除錯資訊 (量比計算來源)"):
-            st.info("若量比顯示 0.00，請檢查「現量」或「倍數」是否為 0。若 10日均量 為 N/A，請按上方更新按鈕。")
-            tab_debug1, tab_debug2 = st.tabs(["🔢 量比計算參數明細", "📊 歷史資料 (Vol10來源)"])
-            with tab_debug1: st.dataframe(pd.DataFrame(debug_calc_list), use_container_width=True)
-            with tab_debug2: 
-                st.markdown("API 抓取到的**歷史 K 線末 3 筆資料** (檢查是否包含今日導致均量失真)：")
-                st.write(debug_ta_list)
+        return float(last_price)
+    except: return None
 
-# ==============================================================================
-# 6. 執行渲染
-# ==============================================================================
+def get_realtime_prices(stock_list):
+    """批次取得價格 (搭配 Progress Bar)"""
+    if "fugle_api_key" not in st.secrets: return {}
+    api_key = st.secrets["fugle_api_key"]
+    prices = {}
+    
+    # 建立進度條
+    progress_bar = st.progress(0)
+    total = len(stock_list)
+    
+    for i, symbol in enumerate(stock_list):
+        price = get_price_from_fugle(symbol, api_key)
+        if price is not None: prices[symbol] = price
+        # 更新進度
+        progress_bar.progress((i + 1) / total)
+        time.sleep(0.1) # 避免觸發 API Rate Limit
+        
+    progress_bar.empty()
+    return prices
 
-if not groups and not inventory_stocks_list:
-    st.warning("目前無自選股設定也無庫存。請使用上方編輯器新增股票。")
-else:
-    render_monitor_table(selected_group, inventory_stocks_list, df_watch, df_mp)
+def get_detailed_quote(symbol, api_key):
+    """
+    取得詳細即時報價 (含漲跌幅、成交量)
+    修正邏輯：若現價為 0，使用昨收價，並將漲跌幅設為 0
+    """
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/{symbol}"
+    headers = {"X-API-KEY": api_key}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        if response.status_code != 200: return None
+        data = response.json()
+        
+        # 1. 取得現價
+        last_price = 0
+        if 'total' in data: last_price = data['total'].get('price', 0)
+        elif 'quote' in data: last_price = data['quote'].get('close', 0)
+        elif 'trade' in data: last_price = data['trade'].get('price', 0)
+        if last_price == 0: last_price = data.get('lastPrice', 0)
+        
+        # 2. 取得漲跌幅與成交量
+        change_percent = 0
+        if 'quote' in data: change_percent = data['quote'].get('changePercent', 0)
+        elif 'changePercent' in data: change_percent = data['changePercent']
+            
+        volume = 0
+        if 'total' in data: volume = data['total'].get('tradeVolume', 0)
+        elif 'trade' in data: volume = data['trade'].get('volume', 0)
+        
+        # 3. 昨收價回退機制 (Fallback)
+        if float(last_price) == 0:
+            previous_close = data.get('previousClose', 0)
+            if previous_close and float(previous_close) > 0:
+                last_price = previous_close
+                change_percent = 0.0 # 使用昨收價時，當日漲跌幅應視為 0
+        
+        return {
+            "price": float(last_price),
+            "change_pct": float(change_percent),
+            "volume": int(volume),
+            "last_updated": datetime.now().strftime('%H:%M:%S')
+        }
+    except: return None
+
+def get_batch_detailed_quotes(stock_list):
+    """批次取得詳細報價 (用於盤中監控)"""
+    if "fugle_api_key" not in st.secrets: return {}
+    api_key = st.secrets["fugle_api_key"]
+    results = {}
+    for symbol in stock_list:
+        res = get_detailed_quote(symbol, api_key)
+        if res: results[symbol] = res
+        time.sleep(0.1)
+    return results
+
+def get_technical_analysis(symbol, api_key):
+    """
+    抓取歷史資料並計算技術指標
+    修正：排除今日盤中資料計算均量 (維持原邏輯)
+    新增：月線趨勢判斷 (翻揚/下彎)
+    """
+    to_date = datetime.now().strftime('%Y-%m-%d')
+    from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
+    
+    url = f"https://api.fugle.tw/marketdata/v1.0/stock/historical/candles/{symbol}"
+    params = {"from": from_date, "to": to_date, "fields": "open,high,low,close,volume"}
+    headers = {"X-API-KEY": api_key}
+    
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=5)
+        data = response.json()
+        if response.status_code != 200 or 'data' not in data: 
+            return {'Signal': '無資料', 'MA20': 0, 'Vol10': 0, 'debug_info': 'API Error'}
+            
+        df = pd.DataFrame(data['data'])
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date')
+        
+        # --- 準備 Debug 資訊 ---
+        last_3_rows = df.tail(3)[['date', 'close', 'volume']].copy()
+        last_3_rows['date'] = last_3_rows['date'].dt.strftime('%Y-%m-%d')
+        debug_info = last_3_rows.to_dict('records') 
+        # ---------------------
+
+        # 1. 排除今日資料 (避免盤中波動影響歷史均線計算)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        last_date_str = df.iloc[-1]['date'].strftime('%Y-%m-%d')
+        
+        df_calc = df.copy()
+        if last_date_str == today_str:
+            df_calc = df.iloc[:-1] # 排除最後一筆，只保留已收盤的 K 線
+        
+        # 2. 計算技術指標
+        df_calc['MA5'] = df_calc['close'].rolling(window=5).mean()
+        df_calc['MA10'] = df_calc['close'].rolling(window=10).mean()
+        df_calc['MA20'] = df_calc['close'].rolling(window=20).mean()
+        df_calc['MA60'] = df_calc['close'].rolling(window=60).mean()
+        df_calc['Vol10'] = df_calc['volume'].rolling(window=10).mean()
+        
+        if len(df_calc) < 2: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
+
+        # 取得最後一筆 (最近一個收盤日)
+        last = df_calc.iloc[-1]
+        # 取得倒數第二筆 (前一個收盤日) -> 用於比較趨勢
+        prev = df_calc.iloc[-2]
+        
+        price = last['close']
+        ma5, ma10, ma20, ma60 = last['MA5'], last['MA10'], last['MA20'], last['MA60']
+        vol10 = last['Vol10']
+        
+        signals = []
+        
+        # A. 判斷站上/跌破月線
+        if pd.notna(ma20):
+            if price < ma20: signals.append("📉破月線") 
+            elif price > ma20: signals.append("🆗站上月線")
+            
+            # [New] B. 判斷月線趨勢 (翻揚/下彎)
+            # 比較 最近一日MA20 vs 前一日MA20
+            prev_ma20 = prev['MA20']
+            if pd.notna(prev_ma20):
+                if ma20 > prev_ma20:
+                    signals.append("⤴️月線翻揚")
+                elif ma20 < prev_ma20:
+                    signals.append("⤵️月線下彎")
+                else:
+                    signals.append("➡️月線走平")
+
+        # C. 判斷均線排列
+        if pd.notna(ma5) and ma5 > ma10 > ma20 > ma60: 
+            signals.append("🔥多頭排列")
+        
+        bias = 0
+        if pd.notna(ma20) and ma20 > 0:
+            bias = (price - ma20) / ma20 * 100
+
+        return {
+            'MA20': round(ma20, 2) if pd.notna(ma20) else 0,
+            'Vol10': int(vol10) if pd.notna(vol10) else 0,
+            'Bias': round(bias, 2),
+            'Signal': " ".join(signals) if signals else "盤整",
+            'debug_info': debug_info
+        }
+    except Exception as e:
+        return {'Signal': 'Error', 'MA20': 0, 'Vol10': 0, 'debug_info': str(e)}
+
+def get_batch_technical_analysis(stock_list):
+    if "fugle_api_key" not in st.secrets: return {}
+    api_key = st.secrets["fugle_api_key"]
+    results = {}
+    total = len(stock_list)
+    show_progress = total > 5
+    if show_progress: bar = st.progress(0)
+    
+    for i, symbol in enumerate(stock_list):
+        res = get_technical_analysis(symbol, api_key)
+        results[symbol] = res
+        if show_progress: bar.progress((i+1)/total)
+        time.sleep(0.2)
+    
+    if show_progress: bar.empty()
+    return results
