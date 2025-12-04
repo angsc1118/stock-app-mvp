@@ -2,7 +2,8 @@
 # 檔案名稱: market_data.py
 # 
 # 修改歷程:
-# 2025-12-02 08:30:00: [Fix] 新增「昨收價回退機制 (Fallback)」。若盤前現價為0，自動使用 previousClose 計算市值。
+# 2025-12-03 14:10:00: [Feat] 新增「月線趨勢判斷」：比較末兩日 MA20 判斷翻揚(⤴️)或下彎(⤵️)
+# 2025-12-02 08:30:00: [Fix] 新增「昨收價回退機制 (Fallback)」
 # 2025-11-23 19:53:00: [Update] 調整盤中戰情監控；現價移除$；格式套用千分位
 # ==============================================================================
 
@@ -36,9 +37,7 @@ def get_price_from_fugle(symbol, api_key):
         if last_price is None or last_price == 0: 
             last_price = data.get('lastPrice', 0)
             
-        # 2. [關鍵修正] 昨收價回退機制 (Fallback)
-        # 如果現價仍為 0 (通常發生在盤前 08:30-09:00 或休市期間 API 歸零)
-        # 則讀取 previousClose 作為計算基準，避免資產歸零
+        # 2. 昨收價回退機制 (Fallback)
         if float(last_price) == 0:
             previous_close = data.get('previousClose', 0)
             if previous_close and float(previous_close) > 0:
@@ -95,8 +94,7 @@ def get_detailed_quote(symbol, api_key):
         if 'total' in data: volume = data['total'].get('tradeVolume', 0)
         elif 'trade' in data: volume = data['trade'].get('volume', 0)
         
-        # 3. [關鍵修正] 昨收價回退機制 (Fallback)
-        # 若現價為 0，改用 previousClose，並強制將漲跌幅設為 0 (代表尚未開盤)
+        # 3. 昨收價回退機制 (Fallback)
         if float(last_price) == 0:
             previous_close = data.get('previousClose', 0)
             if previous_close and float(previous_close) > 0:
@@ -126,6 +124,7 @@ def get_technical_analysis(symbol, api_key):
     """
     抓取歷史資料並計算技術指標
     修正：排除今日盤中資料計算均量 (維持原邏輯)
+    新增：月線趨勢判斷 (翻揚/下彎)
     """
     to_date = datetime.now().strftime('%Y-%m-%d')
     from_date = (datetime.now() - timedelta(days=120)).strftime('%Y-%m-%d')
@@ -156,7 +155,7 @@ def get_technical_analysis(symbol, api_key):
         
         df_calc = df.copy()
         if last_date_str == today_str:
-            df_calc = df.iloc[:-1] # 排除最後一筆
+            df_calc = df.iloc[:-1] # 排除最後一筆，只保留已收盤的 K 線
         
         # 2. 計算技術指標
         df_calc['MA5'] = df_calc['close'].rolling(window=5).mean()
@@ -165,18 +164,38 @@ def get_technical_analysis(symbol, api_key):
         df_calc['MA60'] = df_calc['close'].rolling(window=60).mean()
         df_calc['Vol10'] = df_calc['volume'].rolling(window=10).mean()
         
-        if len(df_calc) < 1: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
+        if len(df_calc) < 2: return {'Signal': '資料不足', 'MA20': 0, 'Vol10': 0, 'debug_info': debug_info}
 
+        # 取得最後一筆 (最近一個收盤日)
         last = df_calc.iloc[-1]
+        # 取得倒數第二筆 (前一個收盤日) -> 用於比較趨勢
+        prev = df_calc.iloc[-2]
+        
         price = last['close']
         ma5, ma10, ma20, ma60 = last['MA5'], last['MA10'], last['MA20'], last['MA60']
         vol10 = last['Vol10']
         
         signals = []
+        
+        # A. 判斷站上/跌破月線
         if pd.notna(ma20):
             if price < ma20: signals.append("📉破月線") 
             elif price > ma20: signals.append("🆗站上月線")
-        if pd.notna(ma5) and ma5 > ma10 > ma20 > ma60: signals.append("🔥多頭排列")
+            
+            # [New] B. 判斷月線趨勢 (翻揚/下彎)
+            # 比較 最近一日MA20 vs 前一日MA20
+            prev_ma20 = prev['MA20']
+            if pd.notna(prev_ma20):
+                if ma20 > prev_ma20:
+                    signals.append("⤴️月線翻揚")
+                elif ma20 < prev_ma20:
+                    signals.append("⤵️月線下彎")
+                else:
+                    signals.append("➡️月線走平")
+
+        # C. 判斷均線排列
+        if pd.notna(ma5) and ma5 > ma10 > ma20 > ma60: 
+            signals.append("🔥多頭排列")
         
         bias = 0
         if pd.notna(ma20) and ma20 > 0:
