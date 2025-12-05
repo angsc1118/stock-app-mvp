@@ -20,7 +20,7 @@ import logic
 import market_data
 
 # 1. 設定頁面配置 (必須在第一行)
-st.set_page_config(page_title="Global Asset Overview", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Asset Overview", layout="wide", page_icon="📊")
 
 # --- [UI] 注入自定義 CSS (仿 Dashboard 風格) ---
 st.markdown("""
