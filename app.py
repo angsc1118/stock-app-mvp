@@ -2,8 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-12-05 15:15:00: [UI] V2 改版：調整三欄式佈局、替換趨勢圖為帳戶圓餅、優化列表間距與配色
-# 2025-12-05 14:00:00: [UI] 重大改版：仿照 Global Asset Overview 暗色儀表板風格
+# 2025-12-05 15:20:00: [Fix] 修正 f-string 格式化順序錯誤 (:,+ -> :+,)
+# 2025-12-05 15:15:00: [UI] V2 改版：調整三欄式佈局
 # ==============================================================================
 
 import streamlit as st
@@ -173,11 +173,11 @@ def render_dashboard(df_raw):
     k1, k2, k3 = st.columns(3)
     
     with k1:
-        # 藍色: 總資產
+        # [Fix] 修正格式化字串為 :+, (先符號再千分位)
         dashboard_card(
             title="Total Net Worth",
             value=f"${int(total_assets):,}",
-            delta_text=f"Unrealized: ${int(total_unrealized_pnl):,+}",
+            delta_text=f"Unrealized: ${int(total_unrealized_pnl):+,}", 
             delta_color="green" if total_unrealized_pnl > 0 else "red",
             bar_color="#29B6F6" # Light Blue
         )
@@ -225,7 +225,7 @@ def render_dashboard(df_raw):
                     height=250,
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#E0E0E0') # [Fix] 強制字體為亮色
+                    font=dict(color='#E0E0E0') # 強制字體為亮色
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
@@ -256,7 +256,7 @@ def render_dashboard(df_raw):
                     height=250,
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#E0E0E0') # [Fix] 強制字體為亮色
+                    font=dict(color='#E0E0E0') # 強制字體為亮色
                 )
                 st.plotly_chart(fig_cash, use_container_width=True)
             else:
