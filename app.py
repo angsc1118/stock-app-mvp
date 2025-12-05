@@ -2,7 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-12-05 15:20:00: [Fix] 修正 f-string 格式化順序錯誤 (:,+ -> :+,)
+# 2025-12-05 16:30:00: [UI] Fix: 修正更新按鈕顏色(改為科技藍)與圓餅圖圖例文字看不見的問題
+# 2025-12-05 15:20:00: [Fix] 修正 f-string 格式化順序錯誤
 # 2025-12-05 15:15:00: [UI] V2 改版：調整三欄式佈局
 # ==============================================================================
 
@@ -35,7 +36,7 @@ st.markdown("""
         background-color: #1E2130; /* 卡片背景色 */
         border-radius: 10px;
         padding: 20px;
-        margin-bottom: 0px; /* 減少底部間距 */
+        margin-bottom: 0px; 
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         height: 100%;
         display: flex;
@@ -68,11 +69,24 @@ st.markdown("""
     .tight-list-item:last-child { border-bottom: none; }
     .stock-name { font-weight: 600; color: #E0E0E0; }
     
-    /* 按鈕樣式微調 */
+    /* [Fix] 按鈕樣式客製化 (取代原生的紅色 primary) */
     div.stButton > button {
+        background-color: #29B6F6; /* 科技藍，呼應總資產卡片 */
+        color: white;
+        border: none;
         border-radius: 6px;
         font-weight: 600;
-        height: 42px; /* 與標題高度對齊 */
+        height: 42px;
+        transition: all 0.3s ease;
+    }
+    div.stButton > button:hover {
+        background-color: #039BE5; /* Hover 時變深藍 */
+        color: white;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    div.stButton > button:active {
+        background-color: #0277BD;
     }
     
     /* Plotly 圖表文字顏色強制修正 */
@@ -90,7 +104,6 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
         color_hex = "#00E676" if delta_color == "green" else "#FF5252"
         delta_html = f'<div class="metric-delta" style="color: {color_hex};">{delta_text}</div>'
     
-    # 使用 min-height 確保卡片高度一致
     html_code = f"""
     <div class="dashboard-card" style="min-height: 140px;">
         <div class="card-header-bar" style="background-color: {bar_color};"></div>
@@ -127,13 +140,13 @@ with st.sidebar:
 # 5. Dashboard 渲染核心
 # ==============================================================================
 
-# 頂部標題與更新按鈕 (對齊優化)
+# 頂部標題與更新按鈕
 c_head, c_btn = st.columns([7, 1])
 with c_head:
     st.markdown("## 🌐 Global Asset Overview")
 with c_btn:
-    # 使用 primary type 讓按鈕在深色模式下更顯眼
-    if st.button("🔄 更新數據", type="primary", use_container_width=True):
+    # [Fix] 移除 type="primary" 以便讓自定義 CSS 生效 (CSS 權重較高)
+    if st.button("🔄 更新數據", use_container_width=True):
         if not df_raw.empty:
             temp_fifo = logic.calculate_fifo_report(df_raw)
             if not temp_fifo.empty:
@@ -164,16 +177,13 @@ def render_dashboard(df_raw):
     total_unrealized_pnl = df_unrealized['未實現損益'].sum() if not df_unrealized.empty else 0
     total_cost = df_unrealized['總持有成本 (FIFO)'].sum() if not df_unrealized.empty else 0
     
-    # 總資產
     total_assets = total_cash + total_market_value
-    # 現金水位
     cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-    # --- ROW 1: KPI Cards (調整為 3 欄) ---
+    # --- ROW 1: KPI Cards ---
     k1, k2, k3 = st.columns(3)
     
     with k1:
-        # [Fix] 修正格式化字串為 :+, (先符號再千分位)
         dashboard_card(
             title="Total Net Worth",
             value=f"${int(total_assets):,}",
@@ -183,7 +193,6 @@ def render_dashboard(df_raw):
         )
         
     with k2:
-        # 紫色: 現金
         dashboard_card(
             title="Liquidity / Cash",
             value=f"${int(total_cash):,}",
@@ -193,19 +202,17 @@ def render_dashboard(df_raw):
         )
 
     with k3:
-        # 灰色: 持股成本
         dashboard_card(
             title="Invested Cost",
             value=f"${int(total_cost):,}",
             delta_text="Total Cost Basis",
-            delta_color="green", # Neutral
+            delta_color="green",
             bar_color="#78909C" # Blue Grey
         )
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 2: Charts & Alerts (3 欄配置) ---
-    # Col 1: 持股配置, Col 2: 帳戶資金, Col 3: Alerts
+    # --- ROW 2: Charts & Alerts ---
     c1, c2, c3 = st.columns(3)
     
     # 1. Asset Allocation (持股)
@@ -213,27 +220,31 @@ def render_dashboard(df_raw):
         with st.container(border=True):
             st.markdown("##### Stock Allocation")
             if not df_unrealized.empty and total_market_value > 0:
-                # 準備資料
                 sorted_stocks = df_unrealized.sort_values('股票市值', ascending=False)
                 fig_pie = px.pie(sorted_stocks, values='股票市值', names='股票名稱', hole=0.6)
                 fig_pie.update_traces(textinfo='percent', textposition='inside')
                 fig_pie.update_layout(
                     template="plotly_dark",
                     showlegend=True,
-                    legend=dict(orientation="h", y=-0.2), # 圖例在下方
+                    # [Fix] 強制設定圖例字體顏色
+                    legend=dict(
+                        orientation="h", 
+                        y=-0.2,
+                        font=dict(color="#E0E0E0") 
+                    ),
                     margin=dict(t=10, b=10, l=10, r=10),
                     height=250,
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#E0E0E0') # 強制字體為亮色
+                    font=dict(color='#E0E0E0') 
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("尚無持股資料")
                 st.write("")
-                st.write("") # 佔位
+                st.write("")
 
-    # 2. Account Cash (帳戶資金 - 取代原本的趨勢圖)
+    # 2. Account Cash (帳戶資金)
     with c2:
         with st.container(border=True):
             st.markdown("##### Cash by Account")
@@ -246,17 +257,22 @@ def render_dashboard(df_raw):
                 df_cash = pd.DataFrame(pie_data)
                 
                 fig_cash = px.pie(df_cash, values='Value', names='Account', hole=0.6,
-                                  color_discrete_sequence=px.colors.qualitative.Pastel) # 使用柔和色系
+                                  color_discrete_sequence=px.colors.qualitative.Pastel)
                 fig_cash.update_traces(textinfo='percent', textposition='inside')
                 fig_cash.update_layout(
                     template="plotly_dark",
                     showlegend=True,
-                    legend=dict(orientation="h", y=-0.2),
+                    # [Fix] 強制設定圖例字體顏色
+                    legend=dict(
+                        orientation="h", 
+                        y=-0.2,
+                        font=dict(color="#E0E0E0")
+                    ),
                     margin=dict(t=10, b=10, l=10, r=10),
                     height=250,
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#E0E0E0') # 強制字體為亮色
+                    font=dict(color='#E0E0E0') 
                 )
                 st.plotly_chart(fig_cash, use_container_width=True)
             else:
@@ -264,16 +280,12 @@ def render_dashboard(df_raw):
                 st.write("")
                 st.write("")
 
-    # 3. Alerts & Actions (移至此層)
+    # 3. Alerts & Actions
     with c3:
-        # 使用自訂高度使其與圓餅圖區塊等高
         with st.container(border=True):
             st.markdown("##### ⚠️ Alerts & Actions")
             
-            # 使用 HTML 列表來控制間距
             alerts_html = ""
-            
-            # (A) 資金水位
             if cash_ratio < 10:
                 alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🔴 Cash Level</span><span>Critical (&lt;10%)</span></div>"
             elif cash_ratio > 80:
@@ -281,7 +293,6 @@ def render_dashboard(df_raw):
             else:
                 alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Cash Level</span><span>Healthy ({cash_ratio:.0f}%)</span></div>"
             
-            # (B) 停損監控
             if not df_unrealized.empty:
                 danger_count = len(df_unrealized[df_unrealized['報酬率 (%)'] < -20])
                 if danger_count > 0:
@@ -289,7 +300,6 @@ def render_dashboard(df_raw):
                 else:
                     alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Stop Loss</span><span>All Clear</span></div>"
             
-            # (C) 獲利領頭羊
             if not df_unrealized.empty:
                 best_stock = df_unrealized.sort_values('報酬率 (%)', ascending=False).iloc[0]
                 if best_stock['報酬率 (%)'] > 0:
@@ -297,23 +307,20 @@ def render_dashboard(df_raw):
 
             st.markdown(alerts_html, unsafe_allow_html=True)
             
-            # 填補高度 (Spacer)
             st.write("")
             st.write("")
             st.write("")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 3: Top Movers & Losers (間距優化版) ---
+    # --- ROW 3: Top Movers & Losers ---
     b1, b2 = st.columns(2)
     
-    # Left: Top Movers (Gainers)
     with b1:
         with st.container(border=True):
             st.markdown("##### 🚀 Top Gainers")
             if not df_unrealized.empty:
                 top_gainers = df_unrealized.sort_values('報酬率 (%)', ascending=False).head(5)
-                # 只顯示賺錢的
                 top_gainers = top_gainers[top_gainers['報酬率 (%)'] > 0]
                 
                 if not top_gainers.empty:
@@ -331,13 +338,11 @@ def render_dashboard(df_raw):
             else:
                 st.caption("No Data")
 
-    # Right: Top Losers
     with b2:
         with st.container(border=True):
             st.markdown("##### 📉 Top Losers")
             if not df_unrealized.empty:
                 top_losers = df_unrealized.sort_values('報酬率 (%)', ascending=True).head(5)
-                # 只顯示賠錢的
                 top_losers = top_losers[top_losers['報酬率 (%)'] < 0]
                 
                 if not top_losers.empty:
