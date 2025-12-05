@@ -2,6 +2,7 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
+# 2025-12-05 15:15:00: [UI] V2 改版：調整三欄式佈局、替換趨勢圖為帳戶圓餅、優化列表間距與配色
 # 2025-12-05 14:00:00: [UI] 重大改版：仿照 Global Asset Overview 暗色儀表板風格
 # ==============================================================================
 
@@ -34,26 +35,48 @@ st.markdown("""
         background-color: #1E2130; /* 卡片背景色 */
         border-radius: 10px;
         padding: 20px;
-        margin-bottom: 20px;
+        margin-bottom: 0px; /* 減少底部間距 */
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
     
     /* KPI 卡片標題條 */
     .card-header-bar {
-        height: 5px;
+        height: 4px;
         width: 100%;
-        border-radius: 5px 5px 0 0;
-        margin-bottom: 10px;
+        border-radius: 4px 4px 0 0;
+        margin-bottom: 12px;
+        opacity: 0.8;
     }
     
     /* 字體樣式 */
-    .metric-label { font-size: 14px; color: #A0A0A0; font-weight: 500; }
-    .metric-value { font-size: 28px; font-weight: 700; color: #FFFFFF; margin: 5px 0; }
-    .metric-delta { font-size: 14px; font-weight: 500; }
+    .metric-label { font-size: 14px; color: #B0B0B0; font-weight: 500; letter-spacing: 0.5px; }
+    .metric-value { font-size: 32px; font-weight: 700; color: #FFFFFF; margin: 4px 0; }
+    .metric-delta { font-size: 13px; font-weight: 500; margin-top: 4px; }
     
-    /* 表格樣式微調 */
-    .stDataFrame { border: none !important; }
+    /* 緊湊列表樣式 (用於 Movers/Losers) */
+    .tight-list-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #333333;
+        font-size: 14px;
+    }
+    .tight-list-item:last-child { border-bottom: none; }
+    .stock-name { font-weight: 600; color: #E0E0E0; }
+    
+    /* 按鈕樣式微調 */
+    div.stButton > button {
+        border-radius: 6px;
+        font-weight: 600;
+        height: 42px; /* 與標題高度對齊 */
+    }
+    
+    /* Plotly 圖表文字顏色強制修正 */
+    .g-gtitle, .g-xtitle, .g-ytitle { fill: #E0E0E0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,12 +88,13 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
     delta_html = ""
     if delta_text:
         color_hex = "#00E676" if delta_color == "green" else "#FF5252"
-        delta_html = f'<span class="metric-delta" style="color: {color_hex};">{delta_text}</span>'
-        
+        delta_html = f'<div class="metric-delta" style="color: {color_hex};">{delta_text}</div>'
+    
+    # 使用 min-height 確保卡片高度一致
     html_code = f"""
-    <div class="dashboard-card">
+    <div class="dashboard-card" style="min-height: 140px;">
         <div class="card-header-bar" style="background-color: {bar_color};"></div>
-        <div class="metric-label">{title}</div>
+        <div class="metric-label">{title.upper()}</div>
         <div class="metric-value">{value}</div>
         {delta_html}
     </div>
@@ -88,7 +112,7 @@ except:
     df_raw = pd.DataFrame()
 
 # ==============================================================================
-# 4. 側邊欄 (保持原樣，功能不變)
+# 4. 側邊欄
 # ==============================================================================
 with st.sidebar:
     st.header("戰情室導航")
@@ -103,13 +127,13 @@ with st.sidebar:
 # 5. Dashboard 渲染核心
 # ==============================================================================
 
-# 頂部標題與更新按鈕
-c_head, c_btn = st.columns([6, 1])
+# 頂部標題與更新按鈕 (對齊優化)
+c_head, c_btn = st.columns([7, 1])
 with c_head:
     st.markdown("## 🌐 Global Asset Overview")
 with c_btn:
-    st.write("")
-    if st.button("🔄 更新", use_container_width=True):
+    # 使用 primary type 讓按鈕在深色模式下更顯眼
+    if st.button("🔄 更新數據", type="primary", use_container_width=True):
         if not df_raw.empty:
             temp_fifo = logic.calculate_fifo_report(df_raw)
             if not temp_fifo.empty:
@@ -140,203 +164,196 @@ def render_dashboard(df_raw):
     total_unrealized_pnl = df_unrealized['未實現損益'].sum() if not df_unrealized.empty else 0
     total_cost = df_unrealized['總持有成本 (FIFO)'].sum() if not df_unrealized.empty else 0
     
-    # 報酬率
-    unrealized_ret = (total_unrealized_pnl / total_cost * 100) if total_cost != 0 else 0
     # 總資產
     total_assets = total_cash + total_market_value
     # 現金水位
     cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
-    
-    # 本金估算 (為了填補 Liabilities 空缺，我們改顯示總投入成本)
-    total_invested = total_cost + total_cash # 粗略估算
 
-    # --- ROW 1: KPI Cards (仿圖中的彩色卡片) ---
-    k1, k2, k3, k4 = st.columns(4)
+    # --- ROW 1: KPI Cards (調整為 3 欄) ---
+    k1, k2, k3 = st.columns(3)
     
     with k1:
-        # 藍色卡片: Total Net Worth
+        # 藍色: 總資產
         dashboard_card(
-            title="Total Net Worth (總資產)",
+            title="Total Net Worth",
             value=f"${int(total_assets):,}",
-            delta_text=f"↗ +${int(total_unrealized_pnl):,} (PnL)" if total_unrealized_pnl > 0 else f"↘ ${int(total_unrealized_pnl):,}",
+            delta_text=f"Unrealized: ${int(total_unrealized_pnl):,+}",
             delta_color="green" if total_unrealized_pnl > 0 else "red",
-            bar_color="#29B6F6" # Blue
+            bar_color="#29B6F6" # Light Blue
         )
         
     with k2:
-        # 綠色卡片: YTD Return (這裡暫用未實現報酬率代替)
+        # 紫色: 現金
         dashboard_card(
-            title="Portfolio Return (報酬率)",
-            value=f"{unrealized_ret:+.2f}%",
-            delta_text="(Unrealized)",
-            delta_color="green" if unrealized_ret > 0 else "red",
-            bar_color="#66BB6A" # Green
-        )
-
-    with k3:
-        # 紫色卡片: Liquidity / Cash
-        dashboard_card(
-            title="Liquidity / Cash (現金)",
+            title="Liquidity / Cash",
             value=f"${int(total_cash):,}",
             delta_text=f"{cash_ratio:.1f}% of Portfolio",
-            delta_color="green", # Neutral
+            delta_color="green", 
             bar_color="#AB47BC" # Purple
         )
 
-    with k4:
-        # 灰色卡片: Total Cost (總成本/本金) - 取代 Liabilities
+    with k3:
+        # 灰色: 持股成本
         dashboard_card(
-            title="Invested Cost (持股成本)",
+            title="Invested Cost",
             value=f"${int(total_cost):,}",
-            delta_text="Stock Only",
-            delta_color="green",
-            bar_color="#78909C" # Grey
+            delta_text="Total Cost Basis",
+            delta_color="green", # Neutral
+            bar_color="#78909C" # Blue Grey
         )
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 2: Charts (Donut + Line) ---
-    c_left, c_right = st.columns([1, 2]) # 比例 1:2，右邊線圖寬一點
+    # --- ROW 2: Charts & Alerts (3 欄配置) ---
+    # Col 1: 持股配置, Col 2: 帳戶資金, Col 3: Alerts
+    c1, c2, c3 = st.columns(3)
     
-    # 左側：Asset Allocation (仿圖中甜甜圈圖)
-    with c_left:
-        with st.container(border=True): # 使用 Streamlit 原生 border container 模擬卡片
-            st.markdown("##### Asset Allocation")
-            if total_assets > 0:
+    # 1. Asset Allocation (持股)
+    with c1:
+        with st.container(border=True):
+            st.markdown("##### Stock Allocation")
+            if not df_unrealized.empty and total_market_value > 0:
                 # 準備資料
-                pie_data = []
-                if total_cash > 0:
-                    pie_data.append({'Type': 'Cash', 'Value': total_cash, 'Color': '#AB47BC'})
-                if not df_unrealized.empty:
-                    # 為了簡化，這裡將股票合併為 Stock，或者您可以依產業分類
-                    # 這裡為了仿圖，我們將前三大持股列出，其餘合併
-                    sorted_stocks = df_unrealized.sort_values('股票市值', ascending=False)
-                    for i, row in sorted_stocks.iterrows():
-                         pie_data.append({'Type': row['股票名稱'], 'Value': row['股票市值']})
-
-                df_pie = pd.DataFrame(pie_data)
-                
-                # 使用 Plotly 畫甜甜圈
-                fig_pie = px.pie(df_pie, values='Value', names='Type', hole=0.6)
+                sorted_stocks = df_unrealized.sort_values('股票市值', ascending=False)
+                fig_pie = px.pie(sorted_stocks, values='股票市值', names='股票名稱', hole=0.6)
                 fig_pie.update_traces(textinfo='percent', textposition='inside')
                 fig_pie.update_layout(
-                    template="plotly_dark", # 關鍵：暗色主題
+                    template="plotly_dark",
                     showlegend=True,
-                    legend=dict(orientation="h", y=-0.1),
-                    margin=dict(t=0, b=0, l=0, r=0),
-                    height=300,
-                    paper_bgcolor='rgba(0,0,0,0)', # 透明背景
-                    plot_bgcolor='rgba(0,0,0,0)'
+                    legend=dict(orientation="h", y=-0.2), # 圖例在下方
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    height=250,
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#E0E0E0') # [Fix] 強制字體為亮色
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
-                st.info("無資產資料")
+                st.info("尚無持股資料")
+                st.write("")
+                st.write("") # 佔位
 
-    # 右側：Performance Trend (仿圖中發光線圖)
-    with c_right:
+    # 2. Account Cash (帳戶資金 - 取代原本的趨勢圖)
+    with c2:
         with st.container(border=True):
-            st.markdown("##### Performance Trend (Asset History)")
-            df_history = database.load_asset_history()
-            if not df_history.empty:
-                df_history['日期'] = pd.to_datetime(df_history['日期'])
-                df_history = df_history.sort_values('日期').drop_duplicates(subset=['日期'], keep='last')
+            st.markdown("##### Cash by Account")
+            if total_cash > 0:
+                pie_data = []
+                for acc_name, amount in acc_balances.items():
+                    if amount > 0:
+                        pie_data.append({'Account': acc_name, 'Value': amount})
                 
-                # 使用 Plotly Graph Objects 製作更精細的線圖 (Area Chart 模擬發光感)
-                fig_line = go.Figure()
-                fig_line.add_trace(go.Scatter(
-                    x=df_history['日期'], 
-                    y=df_history['總資產'],
-                    fill='tozeroy', # 填充下方區域
-                    mode='lines',
-                    line=dict(color='#00E676', width=3), # 螢光綠線條
-                    name='Total Asset'
-                ))
+                df_cash = pd.DataFrame(pie_data)
                 
-                fig_line.update_layout(
+                fig_cash = px.pie(df_cash, values='Value', names='Account', hole=0.6,
+                                  color_discrete_sequence=px.colors.qualitative.Pastel) # 使用柔和色系
+                fig_cash.update_traces(textinfo='percent', textposition='inside')
+                fig_cash.update_layout(
                     template="plotly_dark",
-                    margin=dict(l=0, r=0, t=20, b=0),
-                    height=300,
-                    xaxis=dict(showgrid=False), # 隱藏網格
-                    yaxis=dict(showgrid=True, gridcolor='#333333'),
+                    showlegend=True,
+                    legend=dict(orientation="h", y=-0.2),
+                    margin=dict(t=10, b=10, l=10, r=10),
+                    height=250,
                     paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)'
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#E0E0E0') # [Fix] 強制字體為亮色
                 )
-                st.plotly_chart(fig_line, use_container_width=True)
+                st.plotly_chart(fig_cash, use_container_width=True)
             else:
-                st.info("尚無歷史資產紀錄，請點擊上方「更新」後並至流水帳頁面紀錄。")
+                st.info("無現金餘額")
+                st.write("")
+                st.write("")
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # --- ROW 3: Bottom Sections (Top Movers & Alerts) ---
-    # 原圖有 Map，我們資料沒有地理位置，改放 Top Movers 和 Alerts
-    
-    b1, b2, b3 = st.columns(3)
-    
-    # 左下：Top Gainers (取代 Map)
-    with b1:
-        with st.container(border=True):
-            st.markdown("##### 🚀 Top Movers (Gainers)")
-            if not df_unrealized.empty:
-                # 依報酬率排序
-                top_gainers = df_unrealized.sort_values('報酬率 (%)', ascending=False).head(5)
-                for _, row in top_gainers.iterrows():
-                    col_name, col_val = st.columns([2, 1])
-                    with col_name:
-                        st.markdown(f"**{row['股票名稱']}**")
-                    with col_val:
-                        st.markdown(f"<span style='color:#00E676'>+{row['報酬率 (%)']:.2f}%</span>", unsafe_allow_html=True)
-                    st.divider()
-            else:
-                st.caption("No Data")
-
-    # 中下：Holdings List (取代 Top Movers list of image)
-    with b2:
-        with st.container(border=True):
-            st.markdown("##### 📉 Top Losers / Risk")
-            if not df_unrealized.empty:
-                # 依報酬率倒序
-                top_losers = df_unrealized.sort_values('報酬率 (%)', ascending=True).head(5)
-                for _, row in top_losers.iterrows():
-                    val = row['報酬率 (%)']
-                    color = "#FF5252" if val < 0 else "#00E676"
-                    col_name, col_val = st.columns([2, 1])
-                    with col_name:
-                        st.markdown(f"**{row['股票名稱']}**")
-                    with col_val:
-                        st.markdown(f"<span style='color:{color}'>{val:.2f}%</span>", unsafe_allow_html=True)
-                    st.divider()
-            else:
-                st.caption("No Data")
-
-    # 右下：Alerts & Actions
-    with b3:
+    # 3. Alerts & Actions (移至此層)
+    with c3:
+        # 使用自訂高度使其與圓餅圖區塊等高
         with st.container(border=True):
             st.markdown("##### ⚠️ Alerts & Actions")
             
-            # 1. 資金水位警示
+            # 使用 HTML 列表來控制間距
+            alerts_html = ""
+            
+            # (A) 資金水位
             if cash_ratio < 10:
-                st.markdown("🔴 **Risk (Cash):** Low liquidity (<10%)")
+                alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🔴 Cash Level</span><span>Critical (&lt;10%)</span></div>"
             elif cash_ratio > 80:
-                st.markdown("🟡 **Action:** High cash position (>80%)")
+                alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟡 Cash Level</span><span>High (&gt;80%)</span></div>"
             else:
-                st.markdown("🟢 **Liquidity:** Healthy")
+                alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Cash Level</span><span>Healthy ({cash_ratio:.0f}%)</span></div>"
             
-            st.write("")
-            
-            # 2. 停損警示 (簡單版)
+            # (B) 停損監控
             if not df_unrealized.empty:
                 danger_count = len(df_unrealized[df_unrealized['報酬率 (%)'] < -20])
                 if danger_count > 0:
-                    st.markdown(f"🔴 **Stop Loss:** {danger_count} stocks < -20%")
+                    alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🔴 Stop Loss</span><span>{danger_count} stocks &lt; -20%</span></div>"
                 else:
-                    st.markdown("🟢 **Stop Loss:** No active alerts")
+                    alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Stop Loss</span><span>All Clear</span></div>"
             
+            # (C) 獲利領頭羊
+            if not df_unrealized.empty:
+                best_stock = df_unrealized.sort_values('報酬率 (%)', ascending=False).iloc[0]
+                if best_stock['報酬率 (%)'] > 0:
+                     alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🏆 Best Performer</span><span>{best_stock['股票名稱']} (+{best_stock['報酬率 (%)']:.1f}%)</span></div>"
+
+            st.markdown(alerts_html, unsafe_allow_html=True)
+            
+            # 填補高度 (Spacer)
             st.write("")
-            
-            # 3. 功能連結
-            st.caption("Quick Links:")
-            st.page_link("pages/1_📝_帳務管理.py", label="Go to Ledger", icon="📝")
-            st.page_link("pages/2_🚀_盤中監控.py", label="Live Monitor", icon="🚀")
+            st.write("")
+            st.write("")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- ROW 3: Top Movers & Losers (間距優化版) ---
+    b1, b2 = st.columns(2)
+    
+    # Left: Top Movers (Gainers)
+    with b1:
+        with st.container(border=True):
+            st.markdown("##### 🚀 Top Gainers")
+            if not df_unrealized.empty:
+                top_gainers = df_unrealized.sort_values('報酬率 (%)', ascending=False).head(5)
+                # 只顯示賺錢的
+                top_gainers = top_gainers[top_gainers['報酬率 (%)'] > 0]
+                
+                if not top_gainers.empty:
+                    html_list = ""
+                    for _, row in top_gainers.iterrows():
+                        html_list += f"""
+                        <div class='tight-list-item'>
+                            <span class='stock-name'>{row['股票名稱']} ({row['股票代號']})</span>
+                            <span style='color:#00E676; font-weight:bold;'>+{row['報酬率 (%)']:.2f}%</span>
+                        </div>
+                        """
+                    st.markdown(html_list, unsafe_allow_html=True)
+                else:
+                    st.caption("No positive returns yet.")
+            else:
+                st.caption("No Data")
+
+    # Right: Top Losers
+    with b2:
+        with st.container(border=True):
+            st.markdown("##### 📉 Top Losers")
+            if not df_unrealized.empty:
+                top_losers = df_unrealized.sort_values('報酬率 (%)', ascending=True).head(5)
+                # 只顯示賠錢的
+                top_losers = top_losers[top_losers['報酬率 (%)'] < 0]
+                
+                if not top_losers.empty:
+                    html_list = ""
+                    for _, row in top_losers.iterrows():
+                        html_list += f"""
+                        <div class='tight-list-item'>
+                            <span class='stock-name'>{row['股票名稱']} ({row['股票代號']})</span>
+                            <span style='color:#FF5252; font-weight:bold;'>{row['報酬率 (%)']:.2f}%</span>
+                        </div>
+                        """
+                    st.markdown(html_list, unsafe_allow_html=True)
+                else:
+                    st.caption("No negative returns.")
+            else:
+                st.caption("No Data")
 
 # 6. 主程式執行
 if df_raw.empty:
