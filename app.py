@@ -143,7 +143,7 @@ with st.sidebar:
 # 頂部標題與更新按鈕
 c_head, c_btn = st.columns([7, 1])
 with c_head:
-    st.markdown("## 🌐 Global Asset Overview")
+    st.markdown("## 🌐 Asset Overview")
 with c_btn:
     # [Fix] 移除 type="primary" 以便讓自定義 CSS 生效 (CSS 權重較高)
     if st.button("🔄 更新數據", use_container_width=True):
