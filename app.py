@@ -2,14 +2,13 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-12-01 11:10:00: [Feat] 新增資金水位試算 (子彈計算機)
-# 2025-11-27 15:30:00: [UI] 復原圓餅圖帳戶細節；優化圖例位置
-# 2025-11-27 13:45:00: [UI] 優化首頁 UX (行動版更新按鈕、台股紅漲綠跌 Metric、Toast 回饋)
+# 2025-12-05 14:00:00: [UI] 重大改版：仿照 Global Asset Overview 暗色儀表板風格
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 import time
 import math
@@ -18,10 +17,67 @@ import database
 import logic
 import market_data
 
-# 設定頁面配置
-st.set_page_config(page_title="股票資產戰情室", layout="wide", page_icon="📈")
+# 1. 設定頁面配置 (必須在第一行)
+st.set_page_config(page_title="Global Asset Overview", layout="wide", page_icon="📊")
 
-# 1. 初始化
+# --- [UI] 注入自定義 CSS (仿 Dashboard 風格) ---
+st.markdown("""
+<style>
+    /* 全局背景與字體 */
+    .stApp {
+        background-color: #0E1117; /* 深色背景 */
+        color: #FAFAFA;
+    }
+    
+    /* 卡片容器樣式 */
+    .dashboard-card {
+        background-color: #1E2130; /* 卡片背景色 */
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        height: 100%;
+    }
+    
+    /* KPI 卡片標題條 */
+    .card-header-bar {
+        height: 5px;
+        width: 100%;
+        border-radius: 5px 5px 0 0;
+        margin-bottom: 10px;
+    }
+    
+    /* 字體樣式 */
+    .metric-label { font-size: 14px; color: #A0A0A0; font-weight: 500; }
+    .metric-value { font-size: 28px; font-weight: 700; color: #FFFFFF; margin: 5px 0; }
+    .metric-delta { font-size: 14px; font-weight: 500; }
+    
+    /* 表格樣式微調 */
+    .stDataFrame { border: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# 2. 輔助函式：產生 HTML 卡片
+def dashboard_card(title, value, delta_text, delta_color, bar_color):
+    """
+    生成仿圖中的 KPI 卡片 HTML
+    """
+    delta_html = ""
+    if delta_text:
+        color_hex = "#00E676" if delta_color == "green" else "#FF5252"
+        delta_html = f'<span class="metric-delta" style="color: {color_hex};">{delta_text}</span>'
+        
+    html_code = f"""
+    <div class="dashboard-card">
+        <div class="card-header-bar" style="background-color: {bar_color};"></div>
+        <div class="metric-label">{title}</div>
+        <div class="metric-value">{value}</div>
+        {delta_html}
+    </div>
+    """
+    st.markdown(html_code, unsafe_allow_html=True)
+
+# 3. 初始化 Session
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
 if "ta_data" not in st.session_state: st.session_state["ta_data"] = {}
@@ -32,66 +88,47 @@ except:
     df_raw = pd.DataFrame()
 
 # ==============================================================================
-# 2. 側邊欄 (保留導航與被動資訊，主動操作移至主畫面)
+# 4. 側邊欄 (保持原樣，功能不變)
 # ==============================================================================
 with st.sidebar:
     st.header("戰情室導航")
     st.info("💡 提示：如需「新增交易」或「查詢明細」，請點擊左側頁籤前往 **帳務管理**。")
-    
     st.divider()
-    
-    # 顯示最後更新時間 (被動資訊)
     if st.session_state["price_update_time"]:
         st.caption(f"🕒 最後更新: {st.session_state['price_update_time']}")
     else:
         st.caption("🕒 尚未更新 (顯示庫存成本)")
 
 # ==============================================================================
-# 3. 主畫面 Dashboard
+# 5. Dashboard 渲染核心
 # ==============================================================================
 
-# --- [UI優化] 頂部區塊：標題 + 快速更新按鈕 (Mobile Friendly) ---
-col_header, col_btn = st.columns([3, 1], gap="small")
-
-with col_header:
-    st.title("📈 股票資產戰情室")
-
-with col_btn:
-    # 增加垂直留白，讓按鈕對齊標題文字
-    st.write("") 
+# 頂部標題與更新按鈕
+c_head, c_btn = st.columns([6, 1])
+with c_head:
+    st.markdown("## 🌐 Global Asset Overview")
+with c_btn:
     st.write("")
-    if st.button("🔄 更新股價", use_container_width=True, help="連線 API 取得最新報價"):
+    if st.button("🔄 更新", use_container_width=True):
         if not df_raw.empty:
             temp_fifo = logic.calculate_fifo_report(df_raw)
             if not temp_fifo.empty:
                 stock_ids = temp_fifo['股票代號'].unique().tolist()
-                
-                # [UI優化] 使用 status 顯示詳細進度，取代 spinner
                 with st.status("🚀 連線交易所主機中...", expanded=True) as status:
-                    st.write("1. 正在抓取即時報價 (Fugle API)...")
+                    st.write("1. 抓取即時報價...")
                     prices = market_data.get_realtime_prices(stock_ids)
-                    
-                    st.write("2. 計算技術指標 (均線/量能)...")
+                    st.write("2. 計算技術指標...")
                     ta_data = market_data.get_batch_technical_analysis(stock_ids)
-                    
-                    status.update(label="✅ 資料更新完成！", state="complete", expanded=False)
-                
+                    status.update(label="✅ 更新完成", state="complete", expanded=False)
                 st.session_state["realtime_prices"] = prices
                 st.session_state["ta_data"] = ta_data
                 tw_time = datetime.utcnow() + timedelta(hours=8)
                 st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
-                
-                # [UI優化] 使用 toast 進行輕量化通知
-                st.toast("已更新最新股價資訊！", icon="🎉")
-                time.sleep(1) # 稍作停留讓使用者看到 status 變綠
                 st.rerun()
-            else:
-                st.toast("目前無庫存可更新", icon="ℹ️")
 
-# Dashboard Fragment
 @st.fragment(run_every=60)
-def render_dashboard(df_raw, auto_refresh=False):
-    # 計算基礎數據
+def render_dashboard(df_raw):
+    # --- 計算核心數據 ---
     acc_balances = logic.calculate_account_balances(df_raw)
     total_cash = sum(acc_balances.values())
     
@@ -102,170 +139,207 @@ def render_dashboard(df_raw, auto_refresh=False):
     total_market_value = df_unrealized['股票市值'].sum() if not df_unrealized.empty else 0
     total_unrealized_pnl = df_unrealized['未實現損益'].sum() if not df_unrealized.empty else 0
     total_cost = df_unrealized['總持有成本 (FIFO)'].sum() if not df_unrealized.empty else 0
+    
+    # 報酬率
     unrealized_ret = (total_unrealized_pnl / total_cost * 100) if total_cost != 0 else 0
-    
+    # 總資產
     total_assets = total_cash + total_market_value
+    # 現金水位
     cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
-
-    if auto_refresh: st.caption(f"⚡ 自動更新中... 最後更新: {st.session_state.get('price_update_time', 'N/A')}")
     
-    # --- A. KPI 指標列 ---
-    st.markdown("###") # 增加一點間距
+    # 本金估算 (為了填補 Liabilities 空缺，我們改顯示總投入成本)
+    total_invested = total_cost + total_cash # 粗略估算
+
+    # --- ROW 1: KPI Cards (仿圖中的彩色卡片) ---
     k1, k2, k3, k4 = st.columns(4)
     
-    k1.metric("💰 總資產淨值", f"${int(total_assets):,}")
-    k2.metric("💵 總現金餘額", f"${int(total_cash):,}")
-    
-    # 現金水位
-    ratio_label = "💧 現金水位"
-    k3.metric(ratio_label, f"{cash_ratio:.1f}%") 
-    
-    # [UI優化] 未實現損益：套用 delta_color="inverse" (台股紅漲綠跌)
-    k4.metric(
-        "📈 未實現損益", 
-        f"${int(total_unrealized_pnl):,}", 
-        delta=f"{unrealized_ret:.2f}%", 
-        delta_color="inverse"
-    )
-
-    # --- [New Feature] 資金水位試算 (子彈計算機) ---
-    with st.expander("🧮 資金水位試算 / 子彈計算機", expanded=False):
-        st.markdown("##### 🎯 設定目標與試算")
-        
-        # 1. 計算當前水位 (作為 Slider 預設值)
-        current_ratio_int = int(cash_ratio) if not math.isnan(cash_ratio) else 0
-        
-        # 2. 互動滑桿
-        target_ratio = st.slider(
-            "設定目標現金水位 (%)", 
-            min_value=0, 
-            max_value=100, 
-            value=current_ratio_int, 
-            step=5,
-            help="拉動滑桿以計算該水位下，可動用的資金多寡"
+    with k1:
+        # 藍色卡片: Total Net Worth
+        dashboard_card(
+            title="Total Net Worth (總資產)",
+            value=f"${int(total_assets):,}",
+            delta_text=f"↗ +${int(total_unrealized_pnl):,} (PnL)" if total_unrealized_pnl > 0 else f"↘ ${int(total_unrealized_pnl):,}",
+            delta_color="green" if total_unrealized_pnl > 0 else "red",
+            bar_color="#29B6F6" # Blue
         )
         
-        # 3. 核心公式: X = 現金 - (總資產 * 目標比例)
-        # 若 total_assets 為 0，保護除法
-        if total_assets > 0:
-            bullets = total_cash - (total_assets * (target_ratio / 100))
-        else:
-            bullets = 0
-        
-        # 4. 顯示結果 (區分 加碼 vs 減碼)
-        c_calc1, c_calc2 = st.columns(2)
-        
-        with c_calc1:
-            if bullets > 0:
-                st.metric("🔫 可加碼投入 (子彈)", f"${int(bullets):,}", delta="Buy")
-            elif bullets < 0:
-                # 需賣出回收資金
-                st.metric("🛑 需減碼回收 (賣出)", f"${int(abs(bullets)):,}", delta="Sell", delta_color="inverse")
-            else:
-                st.info("目前已達目標水位")
-                
-        with c_calc2:
-            # 顯示試算後的預期狀態
-            expected_cash = total_assets * (target_ratio / 100)
-            expected_stock = total_assets - expected_cash
-            st.caption(f"試算後現金: ${int(expected_cash):,}")
-            st.caption(f"試算後持股: ${int(expected_stock):,}")
-
-    st.divider()
-
-    # B. 圖表區 (資產趨勢)
-    # [UI優化] 記錄資產按鈕區塊 (放在圖表旁或上方)
-    col_chart_header, col_record_btn = st.columns([4, 1])
-    with col_chart_header:
-        st.subheader("📈 資產成長趨勢")
-    with col_record_btn:
-        if st.button("📝 記錄今日資產", use_container_width=True, help="將當前資產寫入歷史紀錄"):
-             try:
-                today_tw = (datetime.utcnow() + timedelta(hours=8)).date()
-                database.save_asset_history(today_tw, int(total_assets), int(total_cash), int(total_market_value))
-                st.toast(f"✅ 已記錄今日資產: ${total_assets:,}", icon="💾")
-             except Exception as e:
-                st.toast(f"❌ 記錄失敗: {e}", icon="⚠️")
-
-    df_history = database.load_asset_history()
-    if not df_history.empty:
-        df_history['日期'] = pd.to_datetime(df_history['日期'])
-        df_history = df_history.sort_values('日期').drop_duplicates(subset=['日期'], keep='last')
-        
-        # [UI優化] 線圖顏色調整
-        fig_trend = px.line(df_history, x='日期', y='總資產', markers=True)
-        fig_trend.update_traces(line_color='#1E88E5', line_width=3, marker_size=8)
-        fig_trend.update_layout(
-            xaxis_title=None, 
-            yaxis_title=None, 
-            yaxis=dict(tickformat=",.0f"), 
-            height=300,
-            margin=dict(l=20, r=20, t=20, b=20)
+    with k2:
+        # 綠色卡片: YTD Return (這裡暫用未實現報酬率代替)
+        dashboard_card(
+            title="Portfolio Return (報酬率)",
+            value=f"{unrealized_ret:+.2f}%",
+            delta_text="(Unrealized)",
+            delta_color="green" if unrealized_ret > 0 else "red",
+            bar_color="#66BB6A" # Green
         )
-        st.plotly_chart(fig_trend, use_container_width=True)
+
+    with k3:
+        # 紫色卡片: Liquidity / Cash
+        dashboard_card(
+            title="Liquidity / Cash (現金)",
+            value=f"${int(total_cash):,}",
+            delta_text=f"{cash_ratio:.1f}% of Portfolio",
+            delta_color="green", # Neutral
+            bar_color="#AB47BC" # Purple
+        )
+
+    with k4:
+        # 灰色卡片: Total Cost (總成本/本金) - 取代 Liabilities
+        dashboard_card(
+            title="Invested Cost (持股成本)",
+            value=f"${int(total_cost):,}",
+            delta_text="Stock Only",
+            delta_color="green",
+            bar_color="#78909C" # Grey
+        )
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # C. 圓餅圖
-    col_chart1, col_chart2 = st.columns(2)
-    with col_chart1:
-        st.subheader("🍰 資產配置 (各帳戶現金 vs 持股)")
-        if total_assets > 0:
-            pie_data = []
-            
-            # [復原邏輯] 1. 遍歷顯示個別帳戶現金
-            for acc_name, amount in acc_balances.items():
-                if amount > 0:
-                    pie_data.append({
-                        '類別': f'現金-{acc_name}', 
-                        '金額': amount,
-                        'Group': 'Cash'
-                    })
-            
-            # 2. 加入股票部位
-            if total_market_value > 0:
-                pie_data.append({
-                    '類別': '股票部位', 
-                    '金額': total_market_value,
-                    'Group': 'Stock'
-                })
-            
-            df_pie_alloc = pd.DataFrame(pie_data)
-            
-            if not df_pie_alloc.empty:
-                # 讓 Plotly 自動分配顏色以區分不同帳戶
-                fig_alloc = px.pie(df_pie_alloc, values='金額', names='類別', hole=0.5)
-                fig_alloc.update_traces(textinfo='percent+label', textposition='inside')
+    # --- ROW 2: Charts (Donut + Line) ---
+    c_left, c_right = st.columns([1, 2]) # 比例 1:2，右邊線圖寬一點
+    
+    # 左側：Asset Allocation (仿圖中甜甜圈圖)
+    with c_left:
+        with st.container(border=True): # 使用 Streamlit 原生 border container 模擬卡片
+            st.markdown("##### Asset Allocation")
+            if total_assets > 0:
+                # 準備資料
+                pie_data = []
+                if total_cash > 0:
+                    pie_data.append({'Type': 'Cash', 'Value': total_cash, 'Color': '#AB47BC'})
+                if not df_unrealized.empty:
+                    # 為了簡化，這裡將股票合併為 Stock，或者您可以依產業分類
+                    # 這裡為了仿圖，我們將前三大持股列出，其餘合併
+                    sorted_stocks = df_unrealized.sort_values('股票市值', ascending=False)
+                    for i, row in sorted_stocks.iterrows():
+                         pie_data.append({'Type': row['股票名稱'], 'Value': row['股票市值']})
+
+                df_pie = pd.DataFrame(pie_data)
                 
-                # 圖例移到底部
-                fig_alloc.update_layout(
-                    showlegend=True, 
-                    margin=dict(t=20, b=20, l=20, r=20),
-                    legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+                # 使用 Plotly 畫甜甜圈
+                fig_pie = px.pie(df_pie, values='Value', names='Type', hole=0.6)
+                fig_pie.update_traces(textinfo='percent', textposition='inside')
+                fig_pie.update_layout(
+                    template="plotly_dark", # 關鍵：暗色主題
+                    showlegend=True,
+                    legend=dict(orientation="h", y=-0.1),
+                    margin=dict(t=0, b=0, l=0, r=0),
+                    height=300,
+                    paper_bgcolor='rgba(0,0,0,0)', # 透明背景
+                    plot_bgcolor='rgba(0,0,0,0)'
                 )
-                st.plotly_chart(fig_alloc, use_container_width=True)
+                st.plotly_chart(fig_pie, use_container_width=True)
             else:
                 st.info("無資產資料")
 
-    with col_chart2:
-        st.subheader("📊 持股分佈 (依市值)")
-        if not df_unrealized.empty and total_market_value > 0:
-            # 自動顯示前幾大持股
-            fig_stock_pie = px.pie(df_unrealized, values='股票市值', names='股票', hole=0.5)
-            fig_stock_pie.update_traces(textposition='inside', textinfo='percent+label')
-            fig_stock_pie.update_layout(
-                showlegend=True, 
-                margin=dict(t=20, b=20, l=20, r=20),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
-            ) 
-            st.plotly_chart(fig_stock_pie, use_container_width=True)
-        else:
-            st.info("尚無持股資料")
+    # 右側：Performance Trend (仿圖中發光線圖)
+    with c_right:
+        with st.container(border=True):
+            st.markdown("##### Performance Trend (Asset History)")
+            df_history = database.load_asset_history()
+            if not df_history.empty:
+                df_history['日期'] = pd.to_datetime(df_history['日期'])
+                df_history = df_history.sort_values('日期').drop_duplicates(subset=['日期'], keep='last')
+                
+                # 使用 Plotly Graph Objects 製作更精細的線圖 (Area Chart 模擬發光感)
+                fig_line = go.Figure()
+                fig_line.add_trace(go.Scatter(
+                    x=df_history['日期'], 
+                    y=df_history['總資產'],
+                    fill='tozeroy', # 填充下方區域
+                    mode='lines',
+                    line=dict(color='#00E676', width=3), # 螢光綠線條
+                    name='Total Asset'
+                ))
+                
+                fig_line.update_layout(
+                    template="plotly_dark",
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    height=300,
+                    xaxis=dict(showgrid=False), # 隱藏網格
+                    yaxis=dict(showgrid=True, gridcolor='#333333'),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)'
+                )
+                st.plotly_chart(fig_line, use_container_width=True)
+            else:
+                st.info("尚無歷史資產紀錄，請點擊上方「更新」後並至流水帳頁面紀錄。")
 
-# 4. 主程式執行
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- ROW 3: Bottom Sections (Top Movers & Alerts) ---
+    # 原圖有 Map，我們資料沒有地理位置，改放 Top Movers 和 Alerts
+    
+    b1, b2, b3 = st.columns(3)
+    
+    # 左下：Top Gainers (取代 Map)
+    with b1:
+        with st.container(border=True):
+            st.markdown("##### 🚀 Top Movers (Gainers)")
+            if not df_unrealized.empty:
+                # 依報酬率排序
+                top_gainers = df_unrealized.sort_values('報酬率 (%)', ascending=False).head(5)
+                for _, row in top_gainers.iterrows():
+                    col_name, col_val = st.columns([2, 1])
+                    with col_name:
+                        st.markdown(f"**{row['股票名稱']}**")
+                    with col_val:
+                        st.markdown(f"<span style='color:#00E676'>+{row['報酬率 (%)']:.2f}%</span>", unsafe_allow_html=True)
+                    st.divider()
+            else:
+                st.caption("No Data")
+
+    # 中下：Holdings List (取代 Top Movers list of image)
+    with b2:
+        with st.container(border=True):
+            st.markdown("##### 📉 Top Losers / Risk")
+            if not df_unrealized.empty:
+                # 依報酬率倒序
+                top_losers = df_unrealized.sort_values('報酬率 (%)', ascending=True).head(5)
+                for _, row in top_losers.iterrows():
+                    val = row['報酬率 (%)']
+                    color = "#FF5252" if val < 0 else "#00E676"
+                    col_name, col_val = st.columns([2, 1])
+                    with col_name:
+                        st.markdown(f"**{row['股票名稱']}**")
+                    with col_val:
+                        st.markdown(f"<span style='color:{color}'>{val:.2f}%</span>", unsafe_allow_html=True)
+                    st.divider()
+            else:
+                st.caption("No Data")
+
+    # 右下：Alerts & Actions
+    with b3:
+        with st.container(border=True):
+            st.markdown("##### ⚠️ Alerts & Actions")
+            
+            # 1. 資金水位警示
+            if cash_ratio < 10:
+                st.markdown("🔴 **Risk (Cash):** Low liquidity (<10%)")
+            elif cash_ratio > 80:
+                st.markdown("🟡 **Action:** High cash position (>80%)")
+            else:
+                st.markdown("🟢 **Liquidity:** Healthy")
+            
+            st.write("")
+            
+            # 2. 停損警示 (簡單版)
+            if not df_unrealized.empty:
+                danger_count = len(df_unrealized[df_unrealized['報酬率 (%)'] < -20])
+                if danger_count > 0:
+                    st.markdown(f"🔴 **Stop Loss:** {danger_count} stocks < -20%")
+                else:
+                    st.markdown("🟢 **Stop Loss:** No active alerts")
+            
+            st.write("")
+            
+            # 3. 功能連結
+            st.caption("Quick Links:")
+            st.page_link("pages/1_📝_帳務管理.py", label="Go to Ledger", icon="📝")
+            st.page_link("pages/2_🚀_盤中監控.py", label="Live Monitor", icon="🚀")
+
+# 6. 主程式執行
 if df_raw.empty:
     st.info("目前沒有任何交易資料，請前往「帳務管理」頁面新增第一筆交易。")
 else:
-    col_toggle, _ = st.columns([2, 8])
-    auto_refresh_on = col_toggle.toggle("啟用盤中自動更新 (每60秒)", value=False)
-    render_dashboard(df_raw, auto_refresh=auto_refresh_on)
+    render_dashboard(df_raw)
