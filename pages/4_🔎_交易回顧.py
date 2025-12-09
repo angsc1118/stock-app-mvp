@@ -2,8 +2,8 @@
 # 檔案名稱: pages/4_🔎_交易回顧.py
 # 
 # 修改歷程:
-# 2025-12-08 15:45:00: [UI] 優化選單(含損益排序)、簡化時間區間、調整買賣點顏色(藍買紫賣)
-# 2025-12-08 12:30:00: [Feat] 新增動態區間選擇
+# 2025-12-09 13:30:00: [UI] 調整 K 線與成交量配色 (紅改#ffab8c, 綠改#beff99)
+# 2025-12-08 15:45:00: [UI] 優化選單(含損益排序)、簡化時間區間、調整買賣點顏色
 # ==============================================================================
 
 import streamlit as st
@@ -89,16 +89,24 @@ def create_trade_chart(df_slice, df_txns, symbol):
     if not df_slice['MA60'].isnull().all():
         add_plots.append(mpf.make_addplot(df_slice['MA60'], color='green', width=1.2))
 
-    # [UI Fix] 調整買賣點顏色，避免與紅綠 K 線混淆
-    # 買進: 亮藍色 (#2962FF)
-    # 賣出: 亮紫色 (#D500F9)
+    # 買賣點標記 (藍買 / 紫賣)
     if has_buy:
         add_plots.append(mpf.make_addplot(buy_signals, type='scatter', markersize=100, marker='^', color='#2962FF', panel=0))
     if has_sell:
         add_plots.append(mpf.make_addplot(sell_signals, type='scatter', markersize=100, marker='v', color='#D500F9', panel=0))
     
-    # 3. 繪圖風格 (台股紅漲綠跌)
-    mc = mpf.make_marketcolors(up='r', down='g', inherit=True)
+    # 3. 繪圖風格設定 (自定義顏色)
+    # [UI Fix] 依照需求調整 K 線與成交量顏色
+    # up: 漲 (紅 -> #ffab8c)
+    # down: 跌 (綠 -> #beff99)
+    mc = mpf.make_marketcolors(
+        up='#ffab8c', 
+        down='#beff99', 
+        edge='inherit', 
+        wick='inherit', 
+        volume='inherit', # 成交量顏色跟隨 K 線
+        inherit=True
+    )
     s = mpf.make_mpf_style(marketcolors=mc, base_mpf_style='yahoo')
 
     # 4. 繪製
@@ -135,44 +143,35 @@ if df_raw.empty:
 with st.sidebar:
     st.header("🔍 回顧設定")
     
-    # --- A. 股票選單邏輯優化 (含損益排序) ---
+    # A. 股票選單 (含損益排序)
     df_realized = logic.calculate_realized_report(df_raw)
     
-    stock_options = {} # { "2330 (台積電) | $...": "2330" }
+    stock_options = {} 
     
     if df_realized.empty:
-        # 若無已實現損益，則只列出有交易紀錄的股票 (庫存)
         unique_stocks = df_raw[['股票代號', '股票名稱']].drop_duplicates()
         for _, row in unique_stocks.iterrows():
             label = f"{row['股票代號']} ({row['股票名稱']})"
             stock_options[label] = row['股票代號']
     else:
-        # 1. 依股票代號分組，計算「該股總已實現損益」
-        # 這樣可以一眼看出這檔股票歷史上讓我賺多少或賠多少
         stock_summary = df_realized.groupby(['股票代號', '股票名稱'])['已實現損益'].sum().reset_index()
-        
-        # 2. 依照損益金額「由大至小」排序 (賺最多的在上面，賠最多的在下面)
         stock_summary = stock_summary.sort_values('已實現損益', ascending=False)
         
-        # 3. 建立選項清單
         for _, row in stock_summary.iterrows():
             pnl = int(row['已實現損益'])
             sign = "+" if pnl > 0 else ""
             label = f"{row['股票代號']} ({row['股票名稱']}) | 💰 ${sign}{pnl:,}"
             stock_options[label] = row['股票代號']
 
-    # 顯示選單
     if not stock_options:
         st.warning("無資料可選")
         selected_stock_id = None
     else:
-        # keys() 是顯示文字，values() 是實際代號
         selected_label = st.selectbox("1. 選擇股票 (依損益排序)", list(stock_options.keys()))
         selected_stock_id = stock_options[selected_label]
     
-    # --- B. 時間區間簡化 ---
+    # B. 時間區間 (1/3/6月)
     st.write("---")
-    # [UI Fix] 僅保留 1, 3, 6 個月
     time_range_options = {
         "1 個月 (細節)": 30,
         "3 個月 (一季)": 90,
@@ -181,11 +180,10 @@ with st.sidebar:
     selected_range_label = st.radio(
         "2. K 線顯示範圍",
         options=list(time_range_options.keys()),
-        index=1 # 預設 3 個月
+        index=1 
     )
     days_lookback = time_range_options[selected_range_label]
 
-    # 顯示基本資訊
     if selected_stock_id:
         stock_txns = df_raw[df_raw['股票代號'].astype(str) == str(selected_stock_id)].copy()
         stock_txns['交易日期'] = pd.to_datetime(stock_txns['交易日期'])
@@ -239,7 +237,7 @@ if selected_stock_id:
                 fig = create_trade_chart(df_view, target_txns, f"{ticker_name}")
                 st.pyplot(fig)
                 
-                # 圖例說明 (配合新顏色)
+                # 圖例說明
                 st.markdown("""
                 <div style="background-color:#262730; padding:10px; border-radius:5px; font-size:14px;">
                     <b>圖例說明：</b> 
