@@ -99,18 +99,14 @@ def create_trade_chart(df_slice, df_txns, symbol):
     # 3. 繪圖風格設定 (分離配色)
     # up/down: K線顏色 (維持標準紅綠 r/g)
     # volume: 交易量顏色 (使用您指定的淺色系)
-mc = mpf.make_marketcolors(
-    up='r',             # K線漲: 標準紅
-    down='g',           # K線跌: 標準綠
-    edge='inherit', 
-    wick='inherit', 
-    inherit=True        # 必須開啟，讓它先幫我們產生 vup/vdown 的欄位
-)
-
-# 2. 【關鍵步驟】手動覆蓋交易量的顏色
-# mplfinance 內部使用 'vup' 和 'vdown' 來控制交易量顏色
-mc['vup'] = '#ffab8c'    # 交易量漲: 淺紅
-mc['vdown'] = '#beff99'  # 交易量跌: 淺綠
+    mc = mpf.make_marketcolors(
+        up='r',             # K線漲: 標準紅
+        down='g',           # K線跌: 標準綠
+        edge='inherit', 
+        wick='inherit', 
+        volume={'up': '#ffab8c', 'down': '#beff99'}, # [UI Fix] 交易量專屬配色 (漲:淺紅, 跌:淺綠)
+        inherit=True
+    )
     s = mpf.make_mpf_style(marketcolors=mc, base_mpf_style='yahoo')
 
     # 4. 繪製
