@@ -11,7 +11,7 @@ import pandas as pd
 import time
 import math
 from datetime import datetime, timedelta
-
+import utils
 import database
 import logic
 import market_data
@@ -146,6 +146,7 @@ except:
 # ==============================================================================
 # 4. 側邊欄設定 (UI優化重點)
 # ==============================================================================
+utils.render_sidebar_status()
 with st.sidebar:
     # [UI] 降級標題，減少視覺壓迫
     st.subheader("⚙️ 監控設定")
