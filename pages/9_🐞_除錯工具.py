@@ -3,10 +3,11 @@ import pandas as pd
 from collections import deque
 import database
 import logic
+import utils
 
 st.set_page_config(page_title="除錯工具", layout="wide", page_icon="🐞")
 st.title("🐞 庫存計算除錯工具")
-
+utils.render_sidebar_status()
 # 1. 讀取資料
 try:
     df_raw = database.load_data()
