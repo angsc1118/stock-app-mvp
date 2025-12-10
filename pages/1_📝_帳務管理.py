@@ -2,9 +2,8 @@
 # 檔案名稱: pages/1_📝_帳務管理.py
 # 
 # 修改歷程:
-# 2025-12-10 14:00:00: [UI] 階段三重構：側邊欄模式切換(瀏覽/新增)、動態欄位顯示、即時篩選
-# 2025-12-10 13:30:00: [UI] 引入 utils.render_sidebar_status 統一狀態列
-# 2025-11-27 14:30:00: [UI] 優化告警顯示，改用 Expander 收合嚴重虧損警示
+# 2025-12-10 14:15:00: [UI] 調整新增交易表單佈局，移除並排 (Columns)，改為垂直堆疊
+# 2025-12-10 14:00:00: [UI] 階段三重構：側邊欄模式切換(瀏覽/新增)、動態欄位顯示
 # ==============================================================================
 
 import streamlit as st
@@ -41,7 +40,7 @@ except:
     account_settings = {"預設帳戶": 0.6}
     account_list = ["預設帳戶"]
 
-# 初始化 Session State (確保表單狀態)
+# 初始化 Session State
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
 if "txn_account" not in st.session_state: st.session_state["txn_account"] = account_list[0] if account_list else ""
 if st.session_state["txn_account"] not in account_list: st.session_state["txn_account"] = account_list[0] if account_list else ""
@@ -55,21 +54,13 @@ if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 utils.render_sidebar_status()
 
 # ==============================================================================
-# 2. 側邊欄邏輯 (核心重構區)
+# 2. 側邊欄邏輯
 # ==============================================================================
 
-# 定義 Callback
 def submit_callback():
-    # 從 Session State 讀取值 (相容舊邏輯)
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
-    
-    # 根據不同 UI 路徑，action 可能來自不同 key，這裡做統一
-    # 若使用新的 radio/selectbox，需手動對應回原本的 database 邏輯
-    
-    # 讀取暫存的 action (由下方 UI 設定)
     s_action = st.session_state.get("_temp_action", "買進") 
-    
     s_id = st.session_state.txn_stock_id
     s_name = st.session_state.txn_stock_name
     s_qty = st.session_state.txn_qty
@@ -94,14 +85,12 @@ def submit_callback():
         try:
             database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
             
-            # 清空欄位
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
             
-            # Toast 回饋
             if is_cash_flow:
                 amount = int(s_qty * s_price)
                 st.toast(f"✅ 成功記錄：{s_action} ${amount:,} (帳戶: {s_account})", icon="💾")
@@ -116,7 +105,7 @@ def submit_callback():
 
 # --- 側邊欄 UI ---
 with st.sidebar:
-    # 模式切換 (Mode Switcher)
+    # 模式切換
     page_mode = st.radio("🛠️ 操作模式", ["🔍 瀏覽查詢", "📝 新增交易"], horizontal=True)
     st.markdown("---")
 
@@ -124,29 +113,28 @@ with st.sidebar:
     if page_mode == "🔍 瀏覽查詢":
         st.subheader("🔍 篩選條件")
         filter_keyword = st.text_input("搜尋代號或名稱", placeholder="例如: 2330 或 台積電")
-        
         st.info("💡 在此模式下，右側表格會即時過濾顯示結果。")
         
-    # --- MODE B: 新增交易 ---
+    # --- MODE B: 新增交易 (UI Layout Changed) ---
     else:
         st.subheader("📝 新增交易")
         
-        # 1. 基礎資訊 (日期/帳戶)
-        c1, c2 = st.columns(2)
-        c1.date_input("日期", key="txn_date")
-        c2.selectbox("帳戶", options=account_list, key="txn_account")
+        # 1. 基礎資訊 (改為垂直排列)
+        st.date_input("日期", key="txn_date")
+        st.selectbox("帳戶", options=account_list, key="txn_account")
         
-        # 2. 交易大類 (Category)
-        txn_category = st.radio("類別", ["📈 股票買賣", "💸 資金存提", "🎁 股利/其他"], horizontal=True, label_visibility="collapsed")
+        # 2. 交易大類
+        txn_category = st.radio("類別", ["📈 股票買賣", "💸 資金存提", "🎁 股利/其他"], horizontal=True) # 移除 collapsed 以增加清晰度
         
-        # 3. 動態欄位區塊
+        st.write("") # 增加一點間距
+
+        # 3. 動態欄位區塊 (全數改為垂直排列，移除 st.columns)
         if txn_category == "📈 股票買賣":
             action = st.selectbox("動作", ["買進", "賣出"], key="_ui_action_stock")
-            st.session_state["_temp_action"] = action # 傳遞給 callback
+            st.session_state["_temp_action"] = action
             
-            # 代號與名稱
-            col_id, col_name = st.columns([1, 1.5])
-            stock_id_input = col_id.text_input("代號", key="txn_stock_id", placeholder="2330")
+            # 代號
+            stock_id_input = st.text_input("代號", key="txn_stock_id", placeholder="2330")
             
             # 自動帶入名稱邏輯
             if stock_id_input:
@@ -156,27 +144,26 @@ with st.sidebar:
                     st.session_state.txn_stock_name = found_name
                     st.rerun()
             
-            col_name.text_input("名稱", key="txn_stock_name", placeholder="自動帶入")
+            # 名稱
+            st.text_input("名稱", key="txn_stock_name", placeholder="自動帶入")
             
             # 股數與價格
-            c3, c4 = st.columns(2)
-            c3.number_input("股數", min_value=0, step=1000, key="txn_qty")
-            c4.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
+            st.number_input("股數", min_value=0, step=1000, key="txn_qty")
+            st.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
             
         elif txn_category == "💸 資金存提":
             action = st.selectbox("動作", ["入金", "出金"], key="_ui_action_cash")
             st.session_state["_temp_action"] = action
             
-            st.info(f"💡 {action}：請輸入金額 (數量設為1)")
+            st.info(f"💡 {action}：請輸入金額")
             
-            c_amt, c_qty = st.columns([2, 1])
-            c_amt.number_input("金額 ($)", min_value=0.0, step=1000.0, format="%.2f", key="txn_price")
-            # 資金操作強制股數為 1 (或依使用者習慣，這裡設預設值)
+            st.number_input("金額 ($)", min_value=0.0, step=1000.0, format="%.2f", key="txn_price")
+            
+            # 隱藏數量輸入 (強制為1)，避免佔位
             if st.session_state.txn_qty == 0: st.session_state.txn_qty = 1
-            c_qty.number_input("數量", value=1, disabled=True, key="txn_qty_disabled")
-            st.session_state.txn_qty = 1 # 強制寫入
+            st.session_state.txn_qty = 1 
             
-            # 校正工具 (收入 Expander)
+            # 校正工具
             with st.expander("🔧 餘額校正工具"):
                 try:
                     if not df_raw.empty:
@@ -203,24 +190,21 @@ with st.sidebar:
             action = st.selectbox("動作", ["現金股利", "股票股利", "現金增資"], key="_ui_action_div")
             st.session_state["_temp_action"] = action
             
-            col_id, col_name = st.columns([1, 1.5])
-            stock_id_input = col_id.text_input("代號", key="txn_stock_id")
-            # 自動帶入名稱邏輯 (同上)
+            stock_id_input = st.text_input("代號", key="txn_stock_id")
             if stock_id_input:
                 clean_id = str(stock_id_input).strip()
                 found_name = stock_map.get(clean_id, "")
                 if found_name and st.session_state.txn_stock_name != found_name:
                     st.session_state.txn_stock_name = found_name
                     st.rerun()
-            col_name.text_input("名稱", key="txn_stock_name")
+            st.text_input("名稱", key="txn_stock_name")
             
-            c3, c4 = st.columns(2)
             if action == "現金股利":
-                c3.number_input("股數 (持有)", min_value=0, step=1000, key="txn_qty", help="除息時的持有股數(參考用)")
-                c4.number_input("股利總金額", min_value=0.0, step=100.0, format="%.2f", key="txn_price")
+                st.number_input("除息時持有股數 (參考用)", min_value=0, step=1000, key="txn_qty")
+                st.number_input("股利總金額 ($)", min_value=0.0, step=100.0, format="%.2f", key="txn_price")
             else:
-                c3.number_input("股數", min_value=0, step=1000, key="txn_qty")
-                c4.number_input("單價/成本", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
+                st.number_input("股數", min_value=0, step=1000, key="txn_qty")
+                st.number_input("單價/成本", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
 
         # 4. 備註與送出
         with st.expander("📝 備註 (選填)"):
@@ -229,14 +213,13 @@ with st.sidebar:
         st.button("💾 提交交易", on_click=submit_callback, type="primary", use_container_width=True)
 
 # ==============================================================================
-# 3. 主畫面邏輯 (套用篩選)
+# 3. 主畫面邏輯
 # ==============================================================================
 
-# 定義樣式函數
 def style_tw_stock_profit_loss(val):
     if not isinstance(val, (int, float)): return ''
-    if val > 0: return 'color: #E53935' # 紅漲
-    elif val < 0: return 'color: #26a69a' # 綠跌
+    if val > 0: return 'color: #E53935' 
+    elif val < 0: return 'color: #26a69a' 
     return ''
 
 def highlight_severe_loss(val):
@@ -246,55 +229,43 @@ def highlight_severe_loss(val):
     elif val > 0: return 'color: #E53935'
     return ''
 
-# 準備顯示用的 DataFrames
 df_inventory_display = pd.DataFrame()
 df_ledger_display = df_raw.copy()
 
 if not df_raw.empty:
-    # 1. 計算庫存
     df_fifo = logic.calculate_fifo_report(df_raw)
     current_prices = st.session_state.get("realtime_prices", {})
     ta_data = st.session_state.get("ta_data", {})
     df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
     
     if not df_unrealized.empty:
-        # 補充技術指標
         df_unrealized['技術訊號'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('Signal', '-'))
         df_unrealized['月線(20MA)'] = df_unrealized['股票代號'].map(lambda x: ta_data.get(x, {}).get('MA20', 0))
         df_inventory_display = df_unrealized
 
-# --- 應用篩選器邏輯 (Global Filter) ---
-# 如果在「瀏覽查詢」模式且有輸入關鍵字，則過濾所有表格
 filter_txt = ""
 if page_mode == "🔍 瀏覽查詢":
-    # 這裡的變數 filter_keyword 來自 sidebar
-    # 但因為 sidebar 是在上面定義的，直接用即可
-    # 注意：Streamlit 執行順序是由上而下，sidebar 變數此時已存在
     if 'filter_keyword' in locals() and filter_keyword:
         filter_txt = filter_keyword.strip()
         
-        # 過濾庫存表
         if not df_inventory_display.empty:
             mask_inv = df_inventory_display['股票代號'].astype(str).str.contains(filter_txt, case=False) | \
                        df_inventory_display['股票名稱'].str.contains(filter_txt, case=False)
             df_inventory_display = df_inventory_display[mask_inv]
             
-        # 過濾流水帳
         if not df_ledger_display.empty:
             mask_leg = df_ledger_display['股票代號'].astype(str).str.contains(filter_txt, case=False) | \
                        df_ledger_display['股票名稱'].str.contains(filter_txt, case=False)
             df_ledger_display = df_ledger_display[mask_leg]
 
 # ==============================================================================
-# 4. 畫面渲染 (Tabs)
+# 4. 畫面渲染
 # ==============================================================================
 
 tab1, tab2 = st.tabs(["📋 持股庫存 (Overview)", "📂 交易流水帳 (Database)"])
 
-# --- Tab 1: 持股庫存 ---
 with tab1:
     if not df_inventory_display.empty:
-        # [UI] 虧損警示區塊 (僅在未篩選且有資料時顯示，避免過濾後消失)
         if not filter_txt: 
             loss_threshold = -20.0
             danger_stocks = df_inventory_display[df_inventory_display['報酬率 (%)'] < loss_threshold].copy()
@@ -313,7 +284,6 @@ with tab1:
                         hide_index=True
                     )
 
-        # 主資料表
         display_cols = ['股票', '庫存股數', '平均成本', '目前市價', '月線(20MA)', '技術訊號', '股票市值', '未實現損益', '報酬率 (%)', '佔總資產比例 (%)']
         final_cols = [c for c in display_cols if c in df_inventory_display.columns]
 
@@ -338,7 +308,6 @@ with tab1:
         else:
             st.info("目前沒有庫存。")
 
-# --- Tab 2: 原始資料庫 ---
 with tab2:
     if not df_ledger_display.empty:
         if not filter_txt:
