@@ -2,9 +2,8 @@
 # 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
+# 2025-12-10 12:50:00: [UI] 側邊欄優化(階段一)：圖示說明收入 Expander，標題層級調整
 # 2025-12-04 16:30:00: [UI] 導入視覺優化方案：更新量能(⚡)與警示(🔔/💔)圖示
-# 2025-12-03 13:55:00: [UI] 優化表格排序，預設依照「量比」由大至小
-# 2025-12-03 13:00:00: [Fix] 修正漲跌幅顯示異常
 # ==============================================================================
 
 import streamlit as st
@@ -24,7 +23,7 @@ st.title("🚀 盤中戰情監控")
 # 1. 資料準備
 # ==============================================================================
 
-# 讀取庫存 (包含代號與名稱，用於自動注入)
+# 讀取庫存
 try:
     df_txn = database.load_data()
     df_fifo = logic.calculate_fifo_report(df_txn)
@@ -44,7 +43,7 @@ except:
 with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", expanded=False):
     st.caption("💡 操作說明：系統會**自動帶入庫存股票**。請直接修改下方表格設定警示價，並務必點擊「💾 儲存變更」。")
     
-    # A. 讀取現有自選股清單
+    # A. 讀取
     try:
         current_watchlist = database.load_watchlist()
     except:
@@ -55,7 +54,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
         if col not in current_watchlist.columns: 
             current_watchlist[col] = ""
 
-    # B. 庫存自動注入邏輯
+    # B. 注入
     existing_symbols = set(current_watchlist['股票代號'].astype(str).str.strip().tolist())
     
     new_rows = []
@@ -80,7 +79,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
         current_watchlist = pd.concat([current_watchlist, df_new], ignore_index=True)
         st.info(f"✨ 已自動將 {len(new_rows)} 檔庫存股票帶入下方列表，請設定警示價。", icon="🤖")
 
-    # C. 資料型態強制轉換
+    # C. 轉型
     text_cols = ['群組', '股票代號', '股票名稱', '備註']
     for col in text_cols:
         current_watchlist[col] = current_watchlist[col].astype(str).replace('nan', '')
@@ -89,7 +88,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
     for col in num_cols:
         current_watchlist[col] = pd.to_numeric(current_watchlist[col], errors='coerce')
 
-    # D. 顯示編輯器
+    # D. 編輯器
     edited_watchlist = st.data_editor(
         current_watchlist[column_order],
         num_rows="dynamic",
@@ -119,7 +118,7 @@ with st.expander("⚙️ 管理自選股清單 (新增/刪除/設定警示)", ex
             st.error(f"儲存失敗: {e}")
 
 # ==============================================================================
-# 3. 資料讀取
+# 3. 資料讀取 (監控用)
 # ==============================================================================
 
 try:
@@ -145,30 +144,34 @@ except:
     df_mp = pd.DataFrame()
 
 # ==============================================================================
-# 4. 側邊欄設定
+# 4. 側邊欄設定 (UI優化重點)
 # ==============================================================================
 with st.sidebar:
-    st.header("⚙️ 監控設定")
-    selected_group = st.selectbox("選擇監控群組", groups)
+    # [UI] 降級標題，減少視覺壓迫
+    st.subheader("⚙️ 監控設定")
     
+    # 核心操作區
+    selected_group = st.selectbox("選擇監控群組", groups)
     auto_refresh = st.toggle("啟用自動刷新 (30秒)", value=False)
     st.caption("⚠️ 注意：頻繁刷新會消耗 API 額度")
     
     st.divider()
-    st.markdown("### 💡 視覺圖示說明")
-    st.markdown("""
-    **【月線趨勢】**
-    - 🔴 **上彎**: 趨勢向上
-    - ➖ **走平**: 盤整無方向
-    - 🟢 **下彎**: 趨勢向下
     
-    **【動能與警示】**
-    - 🔥 **爆量**: 量比 > 2.0
-    - ⚡ **增量**: 量比 > 1.5
-    - 🔔 **突破**: 現價 >= 高
-    - 💔 **跌破**: 現價 <= 低
-    - 🚀 **多排**: 均線多頭排列
-    """)
+    # [UI] 輔助資訊區：改用 Expander 收合
+    with st.expander("💡 視覺圖示與操作說明", expanded=False):
+        st.markdown("""
+        **【月線趨勢】**
+        - 🔴 **上彎**: 趨勢向上
+        - ➖ **走平**: 盤整無方向
+        - 🟢 **下彎**: 趨勢向下
+        
+        **【動能與警示】**
+        - 🔥 **爆量**: 量比 > 2.0
+        - ⚡ **增量**: 量比 > 1.5
+        - 🔔 **突破**: 現價 >= 高
+        - 💔 **跌破**: 現價 <= 低
+        - 🚀 **多排**: 均線多頭排列
+        """)
 
 # ==============================================================================
 # 5. 核心監控邏輯 (Fragment)
@@ -177,7 +180,6 @@ with st.sidebar:
 @st.fragment(run_every=30 if auto_refresh else None)
 def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     
-    # 1. 決定要監控的股票清單
     target_stocks = []
     if selected_group == "全部":
         watch_list = df_watch['股票代號'].tolist() if not df_watch.empty else []
@@ -192,7 +194,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.info("此群組無股票可監控。")
         return
 
-    # 2. 抓取資料
     try:
         quotes = market_data.get_batch_detailed_quotes(target_stocks)
         ta_data = st.session_state.get("ta_data", {})
@@ -200,15 +201,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         st.error(f"資料抓取失敗: {e}")
         return
 
-    # 3. 取得當前時間與倍數
     tw_now = datetime.utcnow() + timedelta(hours=8)
     current_time_str = tw_now.strftime("%H:%M")
     multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
 
-    # 4. 組裝表格資料
     table_rows = []
     alerts_data = [] 
-    
     debug_ta_list = []      
     debug_calc_list = []    
     
@@ -221,7 +219,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         chg = quote.get('change_pct', 0)
         vol = quote.get('volume', 0) 
         
-        # TA 資料
         ta = ta_data.get(symbol, {})
         signal = ta.get('Signal', '-')
         ma20 = ta.get('MA20', 0)
@@ -231,12 +228,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         if 'debug_info' in ta:
             debug_ta_list.append({'股票代號': symbol, '10日均量(Vol10)': vol_10ma, '歷史資料(末3筆)': ta['debug_info']})
         
-        # 計算動能
         est_vol, vol_ratio = logic.calculate_volume_ratio(vol, vol_10ma, multiplier)
-
         debug_calc_list.append({'股票代號': symbol, '現量 (Vol)': vol, '倍數 (Mult)': multiplier, '預估量 (Est)': est_vol, '10日均量 (MA10)': vol_10ma, '量比 (Ratio)': vol_ratio})
 
-        # 取得基本資料
         name = ""
         high_limit = 0
         low_limit = 0
@@ -253,11 +247,9 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_map = database.get_stock_info_map()
             name = stock_map.get(symbol, symbol)
 
-        # 警示判斷 (使用新的 Visual System)
         status_icon = ""
         stock_alerts = [] 
         
-        # A. 價格警示
         if high_limit > 0 and price >= high_limit:
             msg = f"🔔 突破目標價 {high_limit} (現價 {price})"
             stock_alerts.append(msg)
@@ -267,14 +259,12 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             stock_alerts.append(msg)
             status_icon += "💔"
             
-        # B. 動能警示 (更新圖示)
         if vol_ratio > 2.0: 
             stock_alerts.append(f"🔥 爆量 (量比 {vol_ratio:.2f})")
             status_icon += "🔥"
         elif vol_ratio > 1.5: 
-            status_icon += "⚡" # 改用閃電
+            status_icon += "⚡" 
             
-        # C. 技術警示
         if bias > 20: 
             stock_alerts.append(f"⚠️ 乖離過大 (BIAS {bias:.2f}%)")
             status_icon += "⚠️"
@@ -282,7 +272,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
         if stock_alerts:
             alerts_data.append({"symbol": symbol, "name": name, "msgs": stock_alerts})
         
-        # 格式化
         price_str = f"{price:,.2f}"
         chg_str = f"{chg:.2f}%"
         vol_str = f"{vol:,}"
@@ -311,12 +300,11 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             "10日均量": vol_10ma_str,
             "量比": vol_ratio_str,
             "月線乖離率": f"{bias:.2f}%",
-            "技術訊號": signal, # 這裡已經是包含 🔴/🟢/🚀 的新訊號字串了
+            "技術訊號": signal,
             "警示": status_icon,
             "_sort_ratio": sort_val 
         })
 
-    # 5. 顯示內容
     st.caption(f"最後更新: {tw_now.strftime('%H:%M:%S')} | 量能倍數: {multiplier}")
 
     if alerts_data:
