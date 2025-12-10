@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.express as px
 import database
 import logic
+import utils
 
 # 設定頁面
 st.set_page_config(page_title="績效分析", layout="wide", page_icon="📊")
@@ -20,6 +21,8 @@ try:
     df_raw = database.load_data()
 except:
     df_raw = pd.DataFrame()
+
+utils.render_sidebar_status()
 
 # 2. 定義樣式函數 (與其他頁面一致)
 def style_tw_stock_profit_loss(val):
