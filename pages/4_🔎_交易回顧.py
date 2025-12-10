@@ -13,6 +13,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta
 import logic
 import database
+import utils
 
 st.set_page_config(page_title="交易回顧", layout="wide", page_icon="🔎")
 st.title("🔎 交易回顧與檢討")
@@ -123,7 +124,7 @@ if df_raw.empty:
 # ==============================================================================
 # 3. 側邊欄：選擇與設定
 # ==============================================================================
-
+utils.render_sidebar_status()
 with st.sidebar:
     # [UI] 降級標題
     st.subheader("🔍 回顧設定")
