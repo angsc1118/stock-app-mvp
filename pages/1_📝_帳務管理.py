@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import time
+import utils 
 
 import database
 import logic
@@ -96,6 +97,8 @@ try:
     df_raw = database.load_data()
 except:
     df_raw = pd.DataFrame()
+
+utils.render_sidebar_status()
 
 with st.sidebar:
     st.header("🛠️ 帳務操作")
