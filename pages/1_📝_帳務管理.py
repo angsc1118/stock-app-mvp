@@ -2,8 +2,8 @@
 # 檔案名稱: pages/1_📝_帳務管理.py
 # 
 # 修改歷程:
-# 2025-12-11 11:30:00: [Fix] 修正 st.rerun() 在 callback 中報錯的問題。改為直接在 button 判斷式中執行邏輯。
-# 2025-12-10 14:15:00: [UI] 調整新增交易表單佈局，改為垂直堆疊
+# 2025-12-11 11:45:00: [Fix] 修正 Session State 修改錯誤。回歸 Callback 模式並移除 st.rerun()。
+# 2025-12-11 11:30:00: [Fix] 嘗試修正 rerun 問題 (失敗)
 # ==============================================================================
 
 import streamlit as st
@@ -54,11 +54,12 @@ if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 utils.render_sidebar_status()
 
 # ==============================================================================
-# 2. 側邊欄邏輯 (提交處理)
+# 2. 側邊欄邏輯
 # ==============================================================================
 
-def process_submission():
-    """處理交易提交的邏輯函式 (非 Callback，由主流程呼叫)"""
+# 定義 Callback (在按鈕按下後、頁面重整前執行)
+def submit_callback():
+    # 讀取 Session 中的值
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
     s_action = st.session_state.get("_temp_action", "買進") 
@@ -69,6 +70,7 @@ def process_submission():
     s_notes = st.session_state.txn_notes
     s_discount = account_settings.get(s_account, 0.6)
 
+    # 驗證邏輯
     error_msgs = []
     if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
     
@@ -81,34 +83,41 @@ def process_submission():
     if s_action in ['買進', '賣出', '入金', '出金'] and s_price <= 0: error_msgs.append("❌ 「單價/金額」必須大於 0")
 
     if error_msgs:
-        for err in error_msgs: st.error(err)
-        return False
+        # 使用 Session State 傳遞錯誤訊息到主頁面顯示 (因為 callback 中無法直接 st.error)
+        st.session_state["_form_errors"] = error_msgs
     else:
         try:
             database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
             
-            # 清空欄位
+            # [Fix] 這裡可以安全地清除 Session State，因為 callback 在 widget 渲染前執行
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
+            st.session_state["_form_errors"] = [] # 清除錯誤
             
-            # Toast 回饋
+            # 成功訊息 (Toast 會在下一次 rerun 時顯示)
             if is_cash_flow:
                 amount = int(s_qty * s_price)
                 st.toast(f"✅ 成功記錄：{s_action} ${amount:,} (帳戶: {s_account})", icon="💾")
             else:
                 st.toast(f"✅ 成功新增：{s_name} ({s_id}) {s_action}", icon="💾")
             
-            return True
+            # [重要] 這裡不需要 call st.rerun()，Streamlit 會自動 rerun
             
         except Exception as e:
-            st.error(f"寫入失敗: {e}")
-            return False
+            st.session_state["_form_errors"] = [f"寫入失敗: {e}"]
 
 # --- 側邊欄 UI ---
 with st.sidebar:
+    # 顯示錯誤訊息 (如果有的話)
+    if "_form_errors" in st.session_state and st.session_state["_form_errors"]:
+        for err in st.session_state["_form_errors"]:
+            st.error(err)
+        # 顯示完後清空，避免下次持續顯示
+        st.session_state["_form_errors"] = []
+
     # 模式切換
     page_mode = st.radio("🛠️ 操作模式", ["🔍 瀏覽查詢", "📝 新增交易"], horizontal=True)
     st.markdown("---")
@@ -206,11 +215,8 @@ with st.sidebar:
         with st.expander("📝 備註 (選填)"):
             st.text_area("內容", key="txn_notes", height=60)
             
-        # [Fix] 移除 on_click callback，改為直接在 if block 內執行
-        if st.button("💾 提交交易", type="primary", use_container_width=True):
-            if process_submission():
-                time.sleep(0.5)
-                st.rerun()
+        # [Fix] 改回 on_click 回呼機制
+        st.button("💾 提交交易", type="primary", use_container_width=True, on_click=submit_callback)
 
 # ==============================================================================
 # 3. 主畫面邏輯
