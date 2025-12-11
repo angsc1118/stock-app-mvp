@@ -2,7 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-12-11 13:00:00: [Feat] 第二階段：新增目標追蹤進度條 (Visual Goals)
+# 2025-12-11 14:00:00: [Feat] 第四階段：體驗優化 - 新增「專注模式」開關與時間壓力警示
+# 2025-12-11 13:00:00: [Feat] 第二階段：新增目標追蹤進度條
 # 2025-12-10 13:30:00: [UI] 引入 utils.render_sidebar_status 統一狀態列
 # ==============================================================================
 
@@ -19,7 +20,7 @@ import logic
 import market_data
 import utils
 
-# 1. 設定頁面配置 (必須在第一行)
+# 1. 設定頁面配置
 st.set_page_config(page_title="Global Asset Overview", layout="wide", page_icon="📊")
 
 # --- [UI] 注入自定義 CSS ---
@@ -44,13 +45,22 @@ st.markdown("""
     /* 進度條樣式 (Goals) */
     .goal-container {
         background-color: #1E2130; border-radius: 8px; padding: 15px 20px;
-        margin-bottom: 15px; border: 1px solid #333333;
+        margin-bottom: 15px; border: 1px solid #333333; position: relative;
     }
     .goal-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; font-weight: 600; color: #E0E0E0; }
-    .goal-stats { font-size: 13px; color: #A0A0A0; margin-bottom: 5px; }
-    .progress-bg { width: 100%; height: 10px; background-color: #333333; border-radius: 5px; overflow: hidden; }
+    .goal-stats { font-size: 13px; color: #A0A0A0; margin-bottom: 5px; display: flex; justify-content: space-between; }
+    
+    .progress-bg { width: 100%; height: 10px; background-color: #333333; border-radius: 5px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
     
+    /* [New] 時間刻度樣式 */
+    .time-marker {
+        position: absolute; top: -3px; height: 16px; width: 2px; background-color: #FFFFFF;
+        box-shadow: 0 0 4px rgba(255,255,255,0.8); z-index: 10;
+    }
+    .goal-alert { color: #FF5252; font-weight: bold; margin-left: 10px; font-size: 13px; }
+    .goal-advice { font-size: 12px; color: #FFAB91; margin-top: 5px; font-style: italic; }
+
     /* 按鈕與列表樣式 */
     .tight-list-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333333; font-size: 14px; }
     .tight-list-item:last-child { border-bottom: none; }
@@ -79,25 +89,50 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
     """
     st.markdown(html_code, unsafe_allow_html=True)
 
-# 2.1 [New] 輔助函式：產生進度條 HTML
-def goal_progress_bar(name, current, target, percent):
-    # 根據進度決定顏色 (紅->黃->綠)
-    if percent < 30: bar_color = "linear-gradient(90deg, #FF5252, #FF8A65)" # Red-Orange
-    elif percent < 70: bar_color = "linear-gradient(90deg, #FFB74D, #FFD54F)" # Orange-Yellow
-    else: bar_color = "linear-gradient(90deg, #66BB6A, #00E676)" # Green
+# 2.1 [Updated] 輔助函式：產生進度條 (支援專注模式與時間刻度)
+def goal_progress_bar(name, current, target, percent, time_info, zen_mode):
     
+    # 顏色邏輯
+    if percent < 30: bar_color = "linear-gradient(90deg, #FF5252, #FF8A65)" 
+    elif percent < 70: bar_color = "linear-gradient(90deg, #FFB74D, #FFD54F)" 
+    else: bar_color = "linear-gradient(90deg, #66BB6A, #00E676)" 
+    
+    # 時間刻度與警示 HTML
+    time_marker_html = ""
+    alert_html = ""
+    advice_html = ""
+    
+    # 若非專注模式且有日期設定，才顯示時間壓力資訊
+    if not zen_mode and time_info['has_date']:
+        t_pct = min(max(time_info['time_pct'], 0), 100) # 限制 0-100
+        # 時間刻度 (📍)
+        time_marker_html = f'<div class="time-marker" style="left: {t_pct}%;" title="目前時間進度: {t_pct:.1f}%"></div>'
+        
+        # 落後警示
+        if time_info['status'] == 'behind':
+            alert_html = '<span class="goal-alert">🔴 落後進度</span>'
+            # 建議金額
+            needed = time_info['monthly_needed']
+            if needed > 0:
+                advice_html = f'<div class="goal-advice">💡 為準時達成，建議月存：${int(needed):,}</div>'
+        elif time_info['status'] == 'ahead':
+            alert_html = '<span style="color:#00E676; margin-left:10px; font-size:13px;">🚀 超前進度</span>'
+
     html = f"""
     <div class="goal-container">
         <div class="goal-header">
-            <span>🎯 {name}</span>
+            <span>🎯 {name} {alert_html}</span>
             <span>{percent:.1f}%</span>
         </div>
         <div class="goal-stats">
-            目前: ${int(current):,} / 目標: ${int(target):,}
+            <span>目前: ${int(current):,}</span>
+            <span>目標: ${int(target):,}</span>
         </div>
         <div class="progress-bg">
             <div class="progress-fill" style="width: {percent}%; background: {bar_color};"></div>
+            {time_marker_html}
         </div>
+        {advice_html}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
@@ -120,6 +155,10 @@ utils.render_sidebar_status()
 with st.sidebar:
     st.header("戰情室導航")
     st.info("💡 提示：如需「新增交易」或「查詢明細」，請點擊左側頁籤前往 **帳務管理**。")
+    
+    st.divider()
+    # [New] 專注模式開關 (Zone 2: 核心操作)
+    zen_mode = st.toggle("🧘 專注模式 (Zen Mode)", value=False, help="開啟後將隱藏進度落後警示與時間壓力，只專注於累積金額。")
 
 # ==============================================================================
 # 5. Dashboard 渲染核心
@@ -176,20 +215,29 @@ def render_dashboard(df_raw):
     
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 1.5: [New] Financial Goals ---
-    # 讀取目標設定
+    # --- ROW 1.5: Financial Goals (Updated) ---
     df_goals = database.load_goals()
     if not df_goals.empty:
-        # 計算進度
+        # 傳入交易紀錄以計算進度
         goals_progress = logic.calculate_goal_progress(df_goals, df_raw)
         
         if goals_progress:
-            with st.expander("🎯 Financial Goals (目標追蹤)", expanded=True):
-                # 使用 columns 排版，每行顯示 2 個目標
+            # 根據模式調整標題
+            expander_title = "🎯 Financial Goals (目標累積)" if zen_mode else "🎯 Financial Goals (進度與配速)"
+            
+            with st.expander(expander_title, expanded=True):
                 g_cols = st.columns(2)
                 for i, goal in enumerate(goals_progress):
                     with g_cols[i % 2]:
-                        goal_progress_bar(goal['name'], goal['current'], goal['target'], goal['percent'])
+                        # [UI Update] 傳入 time_info 與 zen_mode 參數
+                        goal_progress_bar(
+                            goal['name'], 
+                            goal['current'], 
+                            goal['target'], 
+                            goal['percent'],
+                            goal['time_info'],
+                            zen_mode
+                        )
             st.markdown("<br>", unsafe_allow_html=True)
 
     # --- ROW 2: Charts & Alerts ---
