@@ -2,8 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
+# 2025-12-11 15:00:00: [UI] Fix: 強力修正 Expander 標題列背景變白問題 (CSS Specificity)
 # 2025-12-11 14:30:00: [UI] Fix: 移除側邊欄導航文字；修正 Expander 展開後背景變白的問題
-# 2025-12-11 14:00:00: [Feat] 第四階段：體驗優化 - 新增「專注模式」開關
 # ==============================================================================
 
 import streamlit as st
@@ -28,16 +28,34 @@ st.markdown("""
     /* 全局背景與字體 */
     .stApp { background-color: #0E1117; color: #FAFAFA; }
     
-    /* [Fix] 強制修正 Expander 展開後的背景色，避免變白 */
-    div[data-testid="stExpanderDetails"] {
-        background-color: #0E1117 !important;
+    /* [Critical Fix] Expander 樣式強力覆蓋 */
+    /* 1. 整個容器 */
+    div[data-testid="stExpander"] {
+        border: none !important;
+        box-shadow: none !important;
+        background-color: transparent !important;
         color: #FAFAFA !important;
     }
-    /* Expander 本體邊框優化 */
-    div[data-testid="stExpander"] {
-        border: 1px solid #333333;
-        border-radius: 8px;
-        background-color: #1E2130; /* 收合時的標題背景 */
+    
+    /* 2. 標題列 (Summary) - 即變白的那個區塊 */
+    div[data-testid="stExpander"] > details > summary {
+        background-color: #1E2130 !important; /* 強制深灰背景 */
+        color: #FAFAFA !important;            /* 強制白字 */
+        border: 1px solid #333333 !important;
+        border-radius: 8px !important;
+        padding-left: 10px !important; /* 增加一點內距 */
+    }
+    
+    /* 3. Hover 效果 */
+    div[data-testid="stExpander"] > details > summary:hover {
+        background-color: #262A3B !important; /* Hover 稍微變亮 */
+        color: #29B6F6 !important;            /* Hover 文字變藍 */
+    }
+
+    /* 4. 內容區塊 (Details) */
+    div[data-testid="stExpanderDetails"] {
+        background-color: #0E1117 !important; /* 與背景融合 */
+        border-top: none !important;
     }
     
     /* 卡片容器樣式 */
