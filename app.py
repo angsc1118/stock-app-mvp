@@ -2,8 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2025-12-11 15:00:00: [UI] Fix: 強力修正 Expander 標題列背景變白問題 (CSS Specificity)
-# 2025-12-11 14:30:00: [UI] Fix: 移除側邊欄導航文字；修正 Expander 展開後背景變白的問題
+# 2025-12-11 15:52:00: [Refactor] 方案 A 實作：將 Dashboard 拆分為 KPI(動)、Goals(靜)、Charts(動) 三區塊
+# 2025-12-11 15:00:00: [UI] Fix: 強力修正 Expander 標題列背景變白問題
 # ==============================================================================
 
 import streamlit as st
@@ -28,33 +28,26 @@ st.markdown("""
     /* 全局背景與字體 */
     .stApp { background-color: #0E1117; color: #FAFAFA; }
     
-    /* [Critical Fix] Expander 樣式強力覆蓋 */
-    /* 1. 整個容器 */
+    /* Expander 樣式修正 */
     div[data-testid="stExpander"] {
         border: none !important;
         box-shadow: none !important;
         background-color: transparent !important;
         color: #FAFAFA !important;
     }
-    
-    /* 2. 標題列 (Summary) - 即變白的那個區塊 */
     div[data-testid="stExpander"] > details > summary {
-        background-color: #1E2130 !important; /* 強制深灰背景 */
-        color: #FAFAFA !important;            /* 強制白字 */
+        background-color: #1E2130 !important;
+        color: #FAFAFA !important;
         border: 1px solid #333333 !important;
         border-radius: 8px !important;
-        padding-left: 10px !important; /* 增加一點內距 */
+        padding-left: 10px !important;
     }
-    
-    /* 3. Hover 效果 */
     div[data-testid="stExpander"] > details > summary:hover {
-        background-color: #262A3B !important; /* Hover 稍微變亮 */
-        color: #29B6F6 !important;            /* Hover 文字變藍 */
+        background-color: #262A3B !important;
+        color: #29B6F6 !important;
     }
-
-    /* 4. 內容區塊 (Details) */
     div[data-testid="stExpanderDetails"] {
-        background-color: #0E1117 !important; /* 與背景融合 */
+        background-color: #0E1117 !important;
         border-top: none !important;
     }
     
@@ -66,31 +59,25 @@ st.markdown("""
     }
     .card-header-bar { height: 4px; width: 100%; border-radius: 4px 4px 0 0; margin-bottom: 12px; opacity: 0.8; }
     
-    /* KPI Metric 樣式 */
+    /* Metric 字體 */
     .metric-label { font-size: 14px; color: #B0B0B0; font-weight: 500; letter-spacing: 0.5px; }
     .metric-value { font-size: 32px; font-weight: 700; color: #FFFFFF; margin: 4px 0; }
     .metric-delta { font-size: 13px; font-weight: 500; margin-top: 4px; }
     
-    /* 進度條樣式 (Goals) */
+    /* 進度條樣式 */
     .goal-container {
         background-color: #1E2130; border-radius: 8px; padding: 15px 20px;
         margin-bottom: 15px; border: 1px solid #333333; position: relative;
     }
     .goal-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; font-weight: 600; color: #E0E0E0; }
     .goal-stats { font-size: 13px; color: #A0A0A0; margin-bottom: 5px; display: flex; justify-content: space-between; }
-    
     .progress-bg { width: 100%; height: 10px; background-color: #333333; border-radius: 5px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
-    
-    /* 時間刻度樣式 */
-    .time-marker {
-        position: absolute; top: -3px; height: 16px; width: 2px; background-color: #FFFFFF;
-        box-shadow: 0 0 4px rgba(255,255,255,0.8); z-index: 10;
-    }
+    .time-marker { position: absolute; top: -3px; height: 16px; width: 2px; background-color: #FFFFFF; box-shadow: 0 0 4px rgba(255,255,255,0.8); z-index: 10; }
     .goal-alert { color: #FF5252; font-weight: bold; margin-left: 10px; font-size: 13px; }
     .goal-advice { font-size: 12px; color: #FFAB91; margin-top: 5px; font-style: italic; }
 
-    /* 按鈕與列表樣式 */
+    /* 其他元件 */
     .tight-list-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333333; font-size: 14px; }
     .tight-list-item:last-child { border-bottom: none; }
     .stock-name { font-weight: 600; color: #E0E0E0; }
@@ -101,7 +88,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 2. 輔助函式：產生 HTML 卡片
+# 2. 輔助函式
 def dashboard_card(title, value, delta_text, delta_color, bar_color):
     delta_html = ""
     if delta_text:
@@ -118,9 +105,7 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
     """
     st.markdown(html_code, unsafe_allow_html=True)
 
-# 2.1 輔助函式：產生進度條
 def goal_progress_bar(name, current, target, percent, time_info, zen_mode):
-    
     if percent < 30: bar_color = "linear-gradient(90deg, #FF5252, #FF8A65)" 
     elif percent < 70: bar_color = "linear-gradient(90deg, #FFB74D, #FFD54F)" 
     else: bar_color = "linear-gradient(90deg, #66BB6A, #00E676)" 
@@ -175,13 +160,11 @@ except:
 # ==============================================================================
 utils.render_sidebar_status()
 
-# [UI Fix] 移除原本的「戰情室導航」區塊
 with st.sidebar:
-    # 僅保留專注模式開關
     zen_mode = st.toggle("🧘 專注模式 (Zen Mode)", value=False, help="開啟後將隱藏進度落後警示與時間壓力，只專注於累積金額。")
 
 # ==============================================================================
-# 5. Dashboard 渲染核心
+# 5. Dashboard 分區渲染邏輯 (Split Rendering)
 # ==============================================================================
 
 # 頂部標題與更新按鈕
@@ -206,12 +189,12 @@ with c_btn:
                 st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
                 st.rerun()
 
+# --- PART A: KPI 卡片 (動態, 60s) ---
 @st.fragment(run_every=60)
-def render_dashboard(df_raw):
-    # --- 計算核心數據 ---
+def render_kpi_section(df_raw):
+    # 重複必要的計算 (Fragment 獨立性)
     acc_balances = logic.calculate_account_balances(df_raw)
     total_cash = sum(acc_balances.values())
-    
     df_fifo = logic.calculate_fifo_report(df_raw)
     current_prices = st.session_state.get("realtime_prices", {})
     df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
@@ -223,19 +206,16 @@ def render_dashboard(df_raw):
     total_assets = total_cash + total_market_value
     cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-    # --- ROW 1: KPI Cards ---
     k1, k2, k3 = st.columns(3)
-    
     with k1:
         dashboard_card("Total Net Worth", f"${int(total_assets):,}", f"Unrealized: ${int(total_unrealized_pnl):+,}", "green" if total_unrealized_pnl > 0 else "red", "#29B6F6")
     with k2:
         dashboard_card("Liquidity / Cash", f"${int(total_cash):,}", f"{cash_ratio:.1f}% of Portfolio", "green", "#AB47BC")
     with k3:
         dashboard_card("Invested Cost", f"${int(total_cost):,}", "Total Cost Basis", "green", "#78909C")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 1.5: Financial Goals ---
+# --- PART B: Financial Goals (靜態, 不自動刷新) ---
+def render_goals_section(df_raw, zen_mode):
     df_goals = database.load_goals()
     if not df_goals.empty:
         goals_progress = logic.calculate_goal_progress(df_goals, df_raw)
@@ -255,9 +235,21 @@ def render_dashboard(df_raw):
                             goal['time_info'],
                             zen_mode
                         )
-            st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 2: Charts & Alerts ---
+# --- PART C: Charts & Alerts (動態, 60s) ---
+@st.fragment(run_every=60)
+def render_charts_section(df_raw):
+    # 重複必要的計算
+    acc_balances = logic.calculate_account_balances(df_raw)
+    total_cash = sum(acc_balances.values())
+    df_fifo = logic.calculate_fifo_report(df_raw)
+    current_prices = st.session_state.get("realtime_prices", {})
+    df_unrealized = logic.calculate_unrealized_pnl(df_fifo, current_prices)
+    
+    total_market_value = df_unrealized['股票市值'].sum() if not df_unrealized.empty else 0
+    total_assets = total_cash + total_market_value
+    cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
+
     c1, c2, c3 = st.columns(3)
     
     # Asset Allocation
@@ -312,7 +304,7 @@ def render_dashboard(df_raw):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- ROW 3: Top Movers & Losers ---
+    # Top Movers & Losers
     b1, b2 = st.columns(2)
     with b1:
         with st.container(border=True):
@@ -340,8 +332,17 @@ def render_dashboard(df_raw):
                 else: st.caption("No negative returns.")
             else: st.caption("No Data")
 
-# 6. 主程式執行
+# 6. 主程式執行 (依序呼叫三個區塊)
 if df_raw.empty:
     st.info("目前沒有任何交易資料，請前往「帳務管理」頁面新增第一筆交易。")
 else:
-    render_dashboard(df_raw)
+    # 區塊 1: KPI (動態)
+    render_kpi_section(df_raw)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 區塊 2: Goals (靜態 - 解決閃爍問題)
+    render_goals_section(df_raw, zen_mode)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 區塊 3: Charts (動態)
+    render_charts_section(df_raw)
