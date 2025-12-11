@@ -2,8 +2,8 @@
 # 檔案名稱: pages/1_📝_帳務管理.py
 # 
 # 修改歷程:
-# 2025-12-11 11:45:00: [Fix] 修正 Session State 修改錯誤。回歸 Callback 模式並移除 st.rerun()。
-# 2025-12-11 11:30:00: [Fix] 嘗試修正 rerun 問題 (失敗)
+# 2025-12-11 13:30:00: [Feat] 第三階段：交易輸入整合 (支援還款 + 目標選擇)
+# 2025-12-11 11:45:00: [Fix] 修正 Session State 修改錯誤
 # ==============================================================================
 
 import streamlit as st
@@ -40,6 +40,13 @@ except:
     account_settings = {"預設帳戶": 0.6}
     account_list = ["預設帳戶"]
 
+# [New] 預先讀取目標設定 (供還款選單使用)
+try:
+    df_goals = database.load_goals()
+    goal_list = df_goals['目標名稱'].unique().tolist() if not df_goals.empty else []
+except:
+    goal_list = []
+
 # 初始化 Session State
 if "txn_date" not in st.session_state: st.session_state["txn_date"] = date.today()
 if "txn_account" not in st.session_state: st.session_state["txn_account"] = account_list[0] if account_list else ""
@@ -57,9 +64,7 @@ utils.render_sidebar_status()
 # 2. 側邊欄邏輯
 # ==============================================================================
 
-# 定義 Callback (在按鈕按下後、頁面重整前執行)
 def submit_callback():
-    # 讀取 Session 中的值
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
     s_action = st.session_state.get("_temp_action", "買進") 
@@ -70,126 +75,129 @@ def submit_callback():
     s_notes = st.session_state.txn_notes
     s_discount = account_settings.get(s_account, 0.6)
 
-    # 驗證邏輯
     error_msgs = []
     if not s_account: error_msgs.append("❌ 請選擇「交易帳戶」")
     
-    is_cash_flow = s_action in ['入金', '出金']
+    # [Logic Update] 資金操作類別增加 '還款'
+    is_cash_flow = s_action in ['入金', '出金', '還款']
+    
     if not is_cash_flow:
         if not s_id: error_msgs.append("❌ 請輸入「股票代號」")
-        if not s_name: error_msgs.append("❌ 未輸入「股票名稱」")
+        if not s_name: error_msgs.append("❌ 請輸入「股票名稱」")
+    elif s_action == '還款' and not s_name:
+        # [New] 若是還款，必須有目標名稱
+        error_msgs.append("❌ 請選擇「還款目標」")
     
     if s_action != '現金股利' and s_qty <= 0: error_msgs.append("❌ 「股數/數量」必須大於 0")
-    if s_action in ['買進', '賣出', '入金', '出金'] and s_price <= 0: error_msgs.append("❌ 「單價/金額」必須大於 0")
+    
+    # 金額檢查
+    if s_action in ['買進', '賣出', '入金', '出金', '還款'] and s_price <= 0:
+        error_msgs.append("❌ 「單價/金額」必須大於 0")
 
     if error_msgs:
-        # 使用 Session State 傳遞錯誤訊息到主頁面顯示 (因為 callback 中無法直接 st.error)
         st.session_state["_form_errors"] = error_msgs
     else:
         try:
             database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
             
-            # [Fix] 這裡可以安全地清除 Session State，因為 callback 在 widget 渲染前執行
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
-            st.session_state["_form_errors"] = [] # 清除錯誤
+            st.session_state["_form_errors"] = []
             
-            # 成功訊息 (Toast 會在下一次 rerun 時顯示)
             if is_cash_flow:
                 amount = int(s_qty * s_price)
                 st.toast(f"✅ 成功記錄：{s_action} ${amount:,} (帳戶: {s_account})", icon="💾")
             else:
                 st.toast(f"✅ 成功新增：{s_name} ({s_id}) {s_action}", icon="💾")
             
-            # [重要] 這裡不需要 call st.rerun()，Streamlit 會自動 rerun
-            
         except Exception as e:
             st.session_state["_form_errors"] = [f"寫入失敗: {e}"]
 
 # --- 側邊欄 UI ---
 with st.sidebar:
-    # 顯示錯誤訊息 (如果有的話)
     if "_form_errors" in st.session_state and st.session_state["_form_errors"]:
-        for err in st.session_state["_form_errors"]:
-            st.error(err)
-        # 顯示完後清空，避免下次持續顯示
+        for err in st.session_state["_form_errors"]: st.error(err)
         st.session_state["_form_errors"] = []
 
-    # 模式切換
     page_mode = st.radio("🛠️ 操作模式", ["🔍 瀏覽查詢", "📝 新增交易"], horizontal=True)
     st.markdown("---")
 
-    # --- MODE A: 瀏覽查詢 ---
     if page_mode == "🔍 瀏覽查詢":
         st.subheader("🔍 篩選條件")
         filter_keyword = st.text_input("搜尋代號或名稱", placeholder="例如: 2330 或 台積電")
         st.info("💡 在此模式下，右側表格會即時過濾顯示結果。")
         
-    # --- MODE B: 新增交易 ---
     else:
         st.subheader("📝 新增交易")
         
-        # 1. 基礎資訊
         st.date_input("日期", key="txn_date")
         st.selectbox("帳戶", options=account_list, key="txn_account")
         
-        # 2. 交易大類
         txn_category = st.radio("類別", ["📈 股票買賣", "💸 資金存提", "🎁 股利/其他"], horizontal=True)
         st.write("") 
 
-        # 3. 動態欄位區塊
         if txn_category == "📈 股票買賣":
             action = st.selectbox("動作", ["買進", "賣出"], key="_ui_action_stock")
             st.session_state["_temp_action"] = action
             
             stock_id_input = st.text_input("代號", key="txn_stock_id", placeholder="2330")
-            
             if stock_id_input:
                 clean_id = str(stock_id_input).strip()
                 found_name = stock_map.get(clean_id, "")
                 if found_name and st.session_state.txn_stock_name != found_name:
                     st.session_state.txn_stock_name = found_name
                     st.rerun()
-            
             st.text_input("名稱", key="txn_stock_name", placeholder="自動帶入")
             st.number_input("股數", min_value=0, step=1000, key="txn_qty")
             st.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
             
         elif txn_category == "💸 資金存提":
-            action = st.selectbox("動作", ["入金", "出金"], key="_ui_action_cash")
+            # [UI Update] 增加「還款」選項
+            action = st.selectbox("動作", ["入金", "出金", "還款"], key="_ui_action_cash")
             st.session_state["_temp_action"] = action
             
-            st.info(f"💡 {action}：請輸入金額")
+            if action == "還款":
+                # [New] 還款目標選擇
+                if goal_list:
+                    target_goal = st.selectbox("🎯 選擇還款目標", goal_list)
+                    # 自動將目標名稱綁定到 stock_name 欄位
+                    st.session_state.txn_stock_name = target_goal
+                    
+                    st.caption(f"💡 金額將計入「{target_goal}」的進度條")
+                else:
+                    st.warning("⚠️ 尚無進行中的目標。請先至 Google Sheet 建立目標。")
+                    st.text_input("或手動輸入名稱", key="txn_stock_name")
+            else:
+                # 一般出入金，清空名稱以免誤導
+                st.session_state.txn_stock_name = ""
+            
             st.number_input("金額 ($)", min_value=0.0, step=1000.0, format="%.2f", key="txn_price")
             
             if st.session_state.txn_qty == 0: st.session_state.txn_qty = 1
             st.session_state.txn_qty = 1 
             
-            # 校正工具
-            with st.expander("🔧 餘額校正工具"):
-                try:
-                    if not df_raw.empty:
-                        balances = logic.calculate_account_balances(df_raw)
-                        sys_bal = int(balances.get(st.session_state.txn_account, 0))
-                    else: sys_bal = 0
-                except: sys_bal = 0
-                
-                st.caption(f"系統餘額: ${sys_bal:,}")
-                real_bal = st.number_input("實際餘額", value=sys_bal, step=1000)
-                diff = real_bal - sys_bal
-                
-                if diff != 0:
-                    if st.button("⚡ 自動填入差額"):
-                        st.session_state["_temp_action"] = "入金" if diff > 0 else "出金"
-                        st.session_state.txn_price = float(abs(diff))
-                        st.session_state.txn_qty = 1
-                        st.session_state.txn_notes = f"餘額校正: 系統({sys_bal})->實際({real_bal})"
-                        st.rerun()
-                else:
-                    st.caption("✅ 帳目吻合")
+            if action != "還款":
+                with st.expander("🔧 餘額校正工具"):
+                    try:
+                        if not df_raw.empty:
+                            balances = logic.calculate_account_balances(df_raw)
+                            sys_bal = int(balances.get(st.session_state.txn_account, 0))
+                        else: sys_bal = 0
+                    except: sys_bal = 0
+                    st.caption(f"系統餘額: ${sys_bal:,}")
+                    real_bal = st.number_input("實際餘額", value=sys_bal, step=1000)
+                    diff = real_bal - sys_bal
+                    if diff != 0:
+                        if st.button("⚡ 自動填入差額"):
+                            st.session_state["_temp_action"] = "入金" if diff > 0 else "出金"
+                            st.session_state.txn_price = float(abs(diff))
+                            st.session_state.txn_qty = 1
+                            st.session_state.txn_notes = f"餘額校正: 系統({sys_bal})->實際({real_bal})"
+                            st.rerun()
+                    else: st.caption("✅ 帳目吻合")
 
         elif txn_category == "🎁 股利/其他":
             action = st.selectbox("動作", ["現金股利", "股票股利", "現金增資"], key="_ui_action_div")
@@ -211,11 +219,9 @@ with st.sidebar:
                 st.number_input("股數", min_value=0, step=1000, key="txn_qty")
                 st.number_input("單價/成本", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
 
-        # 4. 備註與送出
         with st.expander("📝 備註 (選填)"):
             st.text_area("內容", key="txn_notes", height=60)
             
-        # [Fix] 改回 on_click 回呼機制
         st.button("💾 提交交易", type="primary", use_container_width=True, on_click=submit_callback)
 
 # ==============================================================================
