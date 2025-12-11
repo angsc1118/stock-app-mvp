@@ -2,8 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
+# 2025-12-11 13:00:00: [Feat] 第二階段：新增目標追蹤進度條 (Visual Goals)
 # 2025-12-10 13:30:00: [UI] 引入 utils.render_sidebar_status 統一狀態列
-# 2025-12-05 16:30:00: [UI] Fix: 修正更新按鈕顏色與圓餅圖圖例
 # ==============================================================================
 
 import streamlit as st
@@ -17,41 +17,52 @@ import math
 import database
 import logic
 import market_data
-import utils # [New] 匯入工具庫
+import utils
 
-# 1. 設定頁面配置
+# 1. 設定頁面配置 (必須在第一行)
 st.set_page_config(page_title="Global Asset Overview", layout="wide", page_icon="📊")
 
-# --- CSS 樣式 (維持不變) ---
+# --- [UI] 注入自定義 CSS ---
 st.markdown("""
 <style>
+    /* 全局背景與字體 */
     .stApp { background-color: #0E1117; color: #FAFAFA; }
+    
+    /* 卡片容器樣式 */
     .dashboard-card {
         background-color: #1E2130; border-radius: 10px; padding: 20px;
         margin-bottom: 0px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         height: 100%; display: flex; flex-direction: column; justify-content: center;
     }
     .card-header-bar { height: 4px; width: 100%; border-radius: 4px 4px 0 0; margin-bottom: 12px; opacity: 0.8; }
+    
+    /* KPI Metric 樣式 */
     .metric-label { font-size: 14px; color: #B0B0B0; font-weight: 500; letter-spacing: 0.5px; }
     .metric-value { font-size: 32px; font-weight: 700; color: #FFFFFF; margin: 4px 0; }
     .metric-delta { font-size: 13px; font-weight: 500; margin-top: 4px; }
-    .tight-list-item {
-        display: flex; justify-content: space-between; padding: 8px 0;
-        border-bottom: 1px solid #333333; font-size: 14px;
+    
+    /* 進度條樣式 (Goals) */
+    .goal-container {
+        background-color: #1E2130; border-radius: 8px; padding: 15px 20px;
+        margin-bottom: 15px; border: 1px solid #333333;
     }
+    .goal-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; font-weight: 600; color: #E0E0E0; }
+    .goal-stats { font-size: 13px; color: #A0A0A0; margin-bottom: 5px; }
+    .progress-bg { width: 100%; height: 10px; background-color: #333333; border-radius: 5px; overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 5px; transition: width 0.5s ease; }
+    
+    /* 按鈕與列表樣式 */
+    .tight-list-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333333; font-size: 14px; }
     .tight-list-item:last-child { border-bottom: none; }
     .stock-name { font-weight: 600; color: #E0E0E0; }
-    div.stButton > button {
-        background-color: #29B6F6; color: white; border: none; border-radius: 6px;
-        font-weight: 600; height: 42px; transition: all 0.3s ease;
-    }
+    div.stButton > button { background-color: #29B6F6; color: white; border: none; border-radius: 6px; font-weight: 600; height: 42px; transition: all 0.3s ease; }
     div.stButton > button:hover { background-color: #039BE5; color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     div.stButton > button:active { background-color: #0277BD; }
     .g-gtitle, .g-xtitle, .g-ytitle { fill: #E0E0E0 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# 2. 輔助函式 (維持不變)
+# 2. 輔助函式：產生 HTML 卡片
 def dashboard_card(title, value, delta_text, delta_color, bar_color):
     delta_html = ""
     if delta_text:
@@ -68,6 +79,29 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
     """
     st.markdown(html_code, unsafe_allow_html=True)
 
+# 2.1 [New] 輔助函式：產生進度條 HTML
+def goal_progress_bar(name, current, target, percent):
+    # 根據進度決定顏色 (紅->黃->綠)
+    if percent < 30: bar_color = "linear-gradient(90deg, #FF5252, #FF8A65)" # Red-Orange
+    elif percent < 70: bar_color = "linear-gradient(90deg, #FFB74D, #FFD54F)" # Orange-Yellow
+    else: bar_color = "linear-gradient(90deg, #66BB6A, #00E676)" # Green
+    
+    html = f"""
+    <div class="goal-container">
+        <div class="goal-header">
+            <span>🎯 {name}</span>
+            <span>{percent:.1f}%</span>
+        </div>
+        <div class="goal-stats">
+            目前: ${int(current):,} / 目標: ${int(target):,}
+        </div>
+        <div class="progress-bg">
+            <div class="progress-fill" style="width: {percent}%; background: {bar_color};"></div>
+        </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
 # 3. 初始化 Session
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
@@ -79,18 +113,16 @@ except:
     df_raw = pd.DataFrame()
 
 # ==============================================================================
-# 4. 側邊欄 (修改處)
+# 4. 側邊欄
 # ==============================================================================
-# [UI Update] 呼叫共用狀態列
 utils.render_sidebar_status()
 
 with st.sidebar:
     st.header("戰情室導航")
     st.info("💡 提示：如需「新增交易」或「查詢明細」，請點擊左側頁籤前往 **帳務管理**。")
-    # 移除原本底部的更新時間顯示，因為已經由 utils 統一在上方顯示了
 
 # ==============================================================================
-# 5. Dashboard 渲染核心 (維持不變)
+# 5. Dashboard 渲染核心
 # ==============================================================================
 
 # 頂部標題與更新按鈕
@@ -117,7 +149,6 @@ with c_btn:
 
 @st.fragment(run_every=60)
 def render_dashboard(df_raw):
-    # (此處邏輯與上一版完全相同，為節省篇幅，保留原有的渲染邏輯)
     # --- 計算核心數據 ---
     acc_balances = logic.calculate_account_balances(df_raw)
     total_cash = sum(acc_balances.values())
@@ -144,6 +175,22 @@ def render_dashboard(df_raw):
         dashboard_card("Invested Cost", f"${int(total_cost):,}", "Total Cost Basis", "green", "#78909C")
     
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- ROW 1.5: [New] Financial Goals ---
+    # 讀取目標設定
+    df_goals = database.load_goals()
+    if not df_goals.empty:
+        # 計算進度
+        goals_progress = logic.calculate_goal_progress(df_goals, df_raw)
+        
+        if goals_progress:
+            with st.expander("🎯 Financial Goals (目標追蹤)", expanded=True):
+                # 使用 columns 排版，每行顯示 2 個目標
+                g_cols = st.columns(2)
+                for i, goal in enumerate(goals_progress):
+                    with g_cols[i % 2]:
+                        goal_progress_bar(goal['name'], goal['current'], goal['target'], goal['percent'])
+            st.markdown("<br>", unsafe_allow_html=True)
 
     # --- ROW 2: Charts & Alerts ---
     c1, c2, c3 = st.columns(3)
