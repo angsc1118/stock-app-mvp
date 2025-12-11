@@ -2,8 +2,8 @@
 # 檔案名稱: pages/1_📝_帳務管理.py
 # 
 # 修改歷程:
-# 2025-12-10 14:15:00: [UI] 調整新增交易表單佈局，移除並排 (Columns)，改為垂直堆疊
-# 2025-12-10 14:00:00: [UI] 階段三重構：側邊欄模式切換(瀏覽/新增)、動態欄位顯示
+# 2025-12-11 11:30:00: [Fix] 修正 st.rerun() 在 callback 中報錯的問題。改為直接在 button 判斷式中執行邏輯。
+# 2025-12-10 14:15:00: [UI] 調整新增交易表單佈局，改為垂直堆疊
 # ==============================================================================
 
 import streamlit as st
@@ -54,10 +54,11 @@ if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
 utils.render_sidebar_status()
 
 # ==============================================================================
-# 2. 側邊欄邏輯
+# 2. 側邊欄邏輯 (提交處理)
 # ==============================================================================
 
-def submit_callback():
+def process_submission():
+    """處理交易提交的邏輯函式 (非 Callback，由主流程呼叫)"""
     s_date = st.session_state.txn_date
     s_account = st.session_state.txn_account
     s_action = st.session_state.get("_temp_action", "買進") 
@@ -81,27 +82,30 @@ def submit_callback():
 
     if error_msgs:
         for err in error_msgs: st.error(err)
+        return False
     else:
         try:
             database.save_transaction(s_date, s_id, s_name, s_action, s_qty, s_price, s_account, s_notes, s_discount)
             
+            # 清空欄位
             st.session_state.txn_stock_id = ""
             st.session_state.txn_stock_name = ""
             st.session_state.txn_qty = 0
             st.session_state.txn_price = 0.0
             st.session_state.txn_notes = ""
             
+            # Toast 回饋
             if is_cash_flow:
                 amount = int(s_qty * s_price)
                 st.toast(f"✅ 成功記錄：{s_action} ${amount:,} (帳戶: {s_account})", icon="💾")
             else:
                 st.toast(f"✅ 成功新增：{s_name} ({s_id}) {s_action}", icon="💾")
-                
-            time.sleep(0.5)
-            st.rerun()
+            
+            return True
             
         except Exception as e:
             st.error(f"寫入失敗: {e}")
+            return False
 
 # --- 側邊欄 UI ---
 with st.sidebar:
@@ -115,28 +119,25 @@ with st.sidebar:
         filter_keyword = st.text_input("搜尋代號或名稱", placeholder="例如: 2330 或 台積電")
         st.info("💡 在此模式下，右側表格會即時過濾顯示結果。")
         
-    # --- MODE B: 新增交易 (UI Layout Changed) ---
+    # --- MODE B: 新增交易 ---
     else:
         st.subheader("📝 新增交易")
         
-        # 1. 基礎資訊 (改為垂直排列)
+        # 1. 基礎資訊
         st.date_input("日期", key="txn_date")
         st.selectbox("帳戶", options=account_list, key="txn_account")
         
         # 2. 交易大類
-        txn_category = st.radio("類別", ["📈 股票買賣", "💸 資金存提", "🎁 股利/其他"], horizontal=True) # 移除 collapsed 以增加清晰度
-        
-        st.write("") # 增加一點間距
+        txn_category = st.radio("類別", ["📈 股票買賣", "💸 資金存提", "🎁 股利/其他"], horizontal=True)
+        st.write("") 
 
-        # 3. 動態欄位區塊 (全數改為垂直排列，移除 st.columns)
+        # 3. 動態欄位區塊
         if txn_category == "📈 股票買賣":
             action = st.selectbox("動作", ["買進", "賣出"], key="_ui_action_stock")
             st.session_state["_temp_action"] = action
             
-            # 代號
             stock_id_input = st.text_input("代號", key="txn_stock_id", placeholder="2330")
             
-            # 自動帶入名稱邏輯
             if stock_id_input:
                 clean_id = str(stock_id_input).strip()
                 found_name = stock_map.get(clean_id, "")
@@ -144,10 +145,7 @@ with st.sidebar:
                     st.session_state.txn_stock_name = found_name
                     st.rerun()
             
-            # 名稱
             st.text_input("名稱", key="txn_stock_name", placeholder="自動帶入")
-            
-            # 股數與價格
             st.number_input("股數", min_value=0, step=1000, key="txn_qty")
             st.number_input("單價", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
             
@@ -156,10 +154,8 @@ with st.sidebar:
             st.session_state["_temp_action"] = action
             
             st.info(f"💡 {action}：請輸入金額")
-            
             st.number_input("金額 ($)", min_value=0.0, step=1000.0, format="%.2f", key="txn_price")
             
-            # 隱藏數量輸入 (強制為1)，避免佔位
             if st.session_state.txn_qty == 0: st.session_state.txn_qty = 1
             st.session_state.txn_qty = 1 
             
@@ -210,7 +206,11 @@ with st.sidebar:
         with st.expander("📝 備註 (選填)"):
             st.text_area("內容", key="txn_notes", height=60)
             
-        st.button("💾 提交交易", on_click=submit_callback, type="primary", use_container_width=True)
+        # [Fix] 移除 on_click callback，改為直接在 if block 內執行
+        if st.button("💾 提交交易", type="primary", use_container_width=True):
+            if process_submission():
+                time.sleep(0.5)
+                st.rerun()
 
 # ==============================================================================
 # 3. 主畫面邏輯
