@@ -178,7 +178,8 @@ def load_mp_table():
         return pd.DataFrame()
 
 # --- [New] 讀取目標設定 ---
-@st.cache_data(ttl=60) # 設定短暫快取，方便調整目標後即時生效
+# --- [Updated] 讀取目標設定 ---
+@st.cache_data(ttl=60)
 def load_goals():
     ws = get_worksheet(GOALS_SHEET_NAME)
     if not ws: return pd.DataFrame()
@@ -186,17 +187,19 @@ def load_goals():
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # 確保必要欄位存在
-        required_cols = ['目標名稱', '目標金額', '起始日期', '截止日期', '狀態']
+        # [Fix] 新增 '目標類型' 到必要欄位
+        required_cols = ['目標名稱', '目標金額', '起始日期', '截止日期', '狀態', '目標類型']
         for col in required_cols:
             if col not in df.columns: df[col] = ""
             
         # 資料型態轉換
-        # 金額轉數字，日期轉 datetime
         if '目標金額' in df.columns:
-            # 移除逗號後轉數字
             df['目標金額'] = df['目標金額'].astype(str).str.replace(',', '')
             df['目標金額'] = pd.to_numeric(df['目標金額'], errors='coerce').fillna(0)
+            
+        # 預設值處理：若目標類型為空，預設為 "還款" (相容舊資料)
+        if '目標類型' in df.columns:
+            df['目標類型'] = df['目標類型'].replace('', '還款')
             
         # 只回傳狀態為「進行中」的目標
         if '狀態' in df.columns:
