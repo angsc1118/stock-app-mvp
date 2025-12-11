@@ -2,15 +2,15 @@
 # 檔案名稱: database.py
 # 
 # 修改歷程:
-# 2025-11-27 14:50:00: [Feat] 新增 save_watchlist 函式，支援前端編輯自選股
-# 2025-11-24 11:10:00: [Fix] 修正 save_transaction 寫入位置錯誤
+# 2025-12-11 12:40:00: [Feat] 第一階段：新增 load_goals 函式，讀取「目標設定」工作表
+# 2025-11-27 14:50:00: [Feat] 新增 save_watchlist 函式
 # ==============================================================================
 
 import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import logic  # 匯入邏輯層
+import logic
 
 # --- 常數設定 ---
 SHEET_NAME = '交易紀錄'
@@ -19,6 +19,7 @@ ACCOUNT_SHEET_NAME = '交割帳戶設定'
 HISTORY_SHEET_NAME = '資產歷史紀錄'
 WATCHLIST_SHEET_NAME = '自選股清單'
 MP_TABLE_SHEET_NAME = 'mp_table'
+GOALS_SHEET_NAME = '目標設定' # [New] 新增目標設定表
 
 # --- 連線核心 ---
 @st.cache_resource
@@ -88,7 +89,7 @@ def load_data():
         st.error(f"讀取交易紀錄失敗: {e}")
         return pd.DataFrame()
 
-# --- [關鍵修正] 儲存交易 (指定位置寫入) ---
+# --- 儲存交易 ---
 def save_transaction(date_val, stock_id, stock_name, action, qty, price, account, notes, discount):
     ws = get_worksheet(SHEET_NAME)
     if not ws: raise Exception(f"找不到工作表: {SHEET_NAME}")
@@ -96,49 +97,16 @@ def save_transaction(date_val, stock_id, stock_name, action, qty, price, account
     fees = logic.calculate_fees(qty, price, action, discount, stock_id)
     txn_id = logic.generate_txn_id()
     
-    # 確保每個元素都轉為字串或數值，避免 gspread 寫入錯誤
     row_data = [
-        txn_id,                 # 交易ID
-        str(date_val),          # 交易日期
-        str(stock_id),          # 股票代號
-        stock_name,             # 股票名稱
-        action,                 # 交易類別
-        qty,                    # 股數
-        price,                  # 單價
-        fees['commission'],     # 手續費
-        fees['tax'],            # 交易稅
-        fees['other_fees'],     # 其他費用
-        fees['gross_amount'],   # 成交總金額
-        fees['total_fees'],     # 總費用
-        fees['net_cash_flow'],  # 淨收付金額
-        account,                # 交易帳戶
-        notes                   # 備註
+        txn_id, str(date_val), str(stock_id), stock_name, action, qty, price,
+        fees['commission'], fees['tax'], fees['other_fees'], fees['gross_amount'],
+        fees['total_fees'], fees['net_cash_flow'], account, notes
     ]
     
-    # 1. 取得目前已有資料的最後一列 (使用 len(get_all_values) 最準確)
-    # 雖然耗效能一點，但能保證不會覆蓋
     all_values = ws.get_all_values()
     next_row = len(all_values) + 1
-    
-    # 2. 指定範圍寫入 (例如 A501:O501)
-    # row_data 的長度為 15，對應 A 到 O 欄
-    col_count = len(row_data)
-    # 將欄位數轉為字母 (例如 15 -> O)，這裡簡化直接計算範圍
-    # gspread update 支援直接給 row index 和 col index
-    
-    # 使用 update_cells 或 update (range)
-    # 這裡使用 range 寫法： f"A{next_row}"
-    # 注意：如果 row_data 有空值，update 可能會報錯，需確保 list 完整
-    
-    # 簡單暴力的解法：先用 append_row，但強制指定 table_range 參數 (gspread 新版功能)
-    # 或者回歸最原始且穩定的方法：update
-    
-    # 轉換 row_data 為字串陣列，避免 JSON 序列化問題
     formatted_row = [str(item) if item is not None else "" for item in row_data]
-    
-    # 指定從第一欄開始寫入
     ws.update(range_name=f"A{next_row}", values=[formatted_row])
-    
     st.cache_data.clear()
 
 # --- 讀取資產歷史紀錄 ---
@@ -162,14 +130,10 @@ def save_asset_history(date_str, total_assets, total_cash, total_stock):
             row_idx = col_dates.index(str(date_str)) + 1
             ws.update(range_name=f"A{row_idx}:D{row_idx}", values=[row_data])
         else:
-            # 對於歷史紀錄，append_row 通常比較安全，因為它是單純的 log
-            # 但為了保險，我們也可以用同樣的邏輯
             all_values = ws.get_all_values()
             next_row = len(all_values) + 1
             ws.update(range_name=f"A{next_row}", values=[row_data])
-            
     except Exception as e:
-        # 如果讀取失敗，退回 append_row
         ws.append_row(row_data)
 
 # --- 讀取自選股清單 ---
@@ -180,17 +144,28 @@ def load_watchlist():
     try:
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        # 確保必要欄位存在，若無則補上，避免前端報錯
         required_cols = ['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註']
         for col in required_cols:
-            if col not in df.columns:
-                df[col] = ""
+            if col not in df.columns: df[col] = ""
         return df
     except Exception as e:
         print(f"Warning: 讀取自選股失敗: {e}")
         return pd.DataFrame()
 
-# --- 讀取量能倍數表 (mp_table) ---
+# --- 儲存自選股清單 ---
+def save_watchlist(df):
+    ws = get_worksheet(WATCHLIST_SHEET_NAME)
+    if not ws: raise Exception(f"找不到工作表: {WATCHLIST_SHEET_NAME}")
+    try:
+        ws.clear()
+        df_to_save = df.astype(str)
+        data_to_write = [df_to_save.columns.values.tolist()] + df_to_save.values.tolist()
+        ws.update(values=data_to_write)
+        load_watchlist.clear()
+    except Exception as e:
+        raise Exception(f"儲存自選股失敗: {e}")
+
+# --- 讀取量能倍數表 ---
 @st.cache_data(ttl=3600)
 def load_mp_table():
     ws = get_worksheet(MP_TABLE_SHEET_NAME)
@@ -202,28 +177,32 @@ def load_mp_table():
         print(f"Warning: 讀取 mp_table 失敗: {e}")
         return pd.DataFrame()
 
-# --- [New] 儲存自選股清單 ---
-def save_watchlist(df):
-    """將前端編輯後的 DataFrame 寫回 Google Sheet"""
-    ws = get_worksheet(WATCHLIST_SHEET_NAME)
-    if not ws: raise Exception(f"找不到工作表: {WATCHLIST_SHEET_NAME}")
-    
+# --- [New] 讀取目標設定 ---
+@st.cache_data(ttl=60) # 設定短暫快取，方便調整目標後即時生效
+def load_goals():
+    ws = get_worksheet(GOALS_SHEET_NAME)
+    if not ws: return pd.DataFrame()
     try:
-        # 1. 清空舊資料
-        ws.clear()
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
         
-        # 2. 準備寫入資料 (含標題)
-        # 確保所有資料轉為字串，避免 JSON 錯誤
-        df_to_save = df.astype(str)
-        
-        # 組合標題與內容
-        data_to_write = [df_to_save.columns.values.tolist()] + df_to_save.values.tolist()
-        
-        # 3. 寫入
-        ws.update(values=data_to_write)
-        
-        # 4. 清除快取，確保下次讀取是新的
-        load_watchlist.clear()
-        
+        # 確保必要欄位存在
+        required_cols = ['目標名稱', '目標金額', '起始日期', '截止日期', '狀態']
+        for col in required_cols:
+            if col not in df.columns: df[col] = ""
+            
+        # 資料型態轉換
+        # 金額轉數字，日期轉 datetime
+        if '目標金額' in df.columns:
+            # 移除逗號後轉數字
+            df['目標金額'] = df['目標金額'].astype(str).str.replace(',', '')
+            df['目標金額'] = pd.to_numeric(df['目標金額'], errors='coerce').fillna(0)
+            
+        # 只回傳狀態為「進行中」的目標
+        if '狀態' in df.columns:
+            df = df[df['狀態'] == '進行中']
+            
+        return df
     except Exception as e:
-        raise Exception(f"儲存自選股失敗: {e}")
+        print(f"Warning: 讀取目標設定失敗: {e}")
+        return pd.DataFrame()
