@@ -301,3 +301,54 @@ def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
         
     ratio = est_vol / vol_10ma_sheets
     return int(est_vol), round(ratio, 2)
+
+# --- [New] 目標進度運算 ---
+def calculate_goal_progress(df_goals, df_txn):
+    """
+    計算目標達成率
+    邏輯：
+    1. 讀取目標設定檔 (分母)
+    2. 讀取交易紀錄，篩選「還款」類別，依據「股票名稱(目標名)」加總 (分子)
+    3. 回傳整合後的清單
+    """
+    if df_goals.empty:
+        return []
+
+    # 1. 計算目前的累積還款額 (從交易紀錄)
+    current_progress_map = {}
+    
+    if not df_txn.empty:
+        # 篩選類別為 '還款' 的紀錄
+        # 注意：還款金額在資料庫是負數，需轉絕對值
+        df_repay = df_txn[df_txn['交易類別'] == '還款'].copy()
+        
+        if not df_repay.empty:
+            # 確保金額為數值
+            df_repay['淨收付金額'] = pd.to_numeric(df_repay['淨收付金額'].astype(str).str.replace(',', ''), errors='coerce').abs()
+            # 依據 '股票名稱' (即目標名稱) 分組加總
+            current_progress_map = df_repay.groupby('股票名稱')['淨收付金額'].sum().to_dict()
+
+    # 2. 整合目標與進度
+    goals_data = []
+    for _, row in df_goals.iterrows():
+        name = str(row.get('目標名稱', '')).strip()
+        target = float(row.get('目標金額', 0))
+        if target <= 0: continue # 避免除以零
+        
+        # 取得目前進度 (若無紀錄則為 0)
+        current = current_progress_map.get(name, 0.0)
+        
+        # 計算百分比
+        pct = (current / target) * 100
+        if pct > 100: pct = 100
+        
+        goals_data.append({
+            'name': name,
+            'target': target,
+            'current': current,
+            'percent': pct,
+            'start_date': row.get('起始日期', ''),
+            'end_date': row.get('截止日期', '')
+        })
+        
+    return goals_data
