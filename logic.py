@@ -2,9 +2,8 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
-# 2025-11-24 17:10:00: [Fix] 修正 calculate_volume_ratio 量比公式；統一單位為「張」(將 Vol10 除以 1000)
-# 2025-11-24 13:00:00: [Fix] 強化 calculate_account_balances，使用 regex 強制清除 $ 與 , 避免字串串接錯誤
-# 2025-11-24 09:45:00: [Fix] 強制同日交易排序：先買進後賣出
+# 2025-12-11 13:30:00: [Feat] 第三階段：支援「還款」邏輯 (視為負向現金流)
+# 2025-12-11 13:00:00: [Feat] 第二階段：新增目標進度運算 calculate_goal_progress
 # ==============================================================================
 
 import pandas as pd
@@ -37,6 +36,8 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     total_fees = commission + tax + other_fees
     
     net_cash_flow = 0
+    
+    # [關鍵修改] 定義各類動作的現金流向
     if action in ['買進', '現金增資']:
         net_cash_flow = -(gross_amount + total_fees)
     elif action == '賣出':
@@ -45,7 +46,7 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
         net_cash_flow = gross_amount - total_fees
     elif action == '入金':
         net_cash_flow = gross_amount
-    elif action == '出金':
+    elif action in ['出金', '還款']: # [New] 還款視同出金 (現金減少)
         net_cash_flow = -gross_amount
         
     return {
@@ -61,11 +62,9 @@ def generate_txn_id():
     return f"TXN-{str(uuid.uuid4())[:8].upper()}"
 
 def _safe_float(value):
-    """輔助函式：安全轉換字串為浮點數"""
     try:
         if isinstance(value, (int, float)):
             return float(value)
-        # 使用 regex 移除非數字字元 (保留 . 和 -)
         clean_val = str(value).replace(',', '').replace('$', '').strip()
         if not clean_val:
             return 0.0
@@ -79,7 +78,10 @@ def _get_action_sort_order(action):
     else: return 3
 
 def calculate_fifo_report(df):
+    if df.empty: return pd.DataFrame()
+    df = df.copy()
     df.columns = df.columns.str.strip()
+    
     col_date = '交易日期'
     col_id = '股票代號'
     col_name = '股票名稱'
@@ -101,7 +103,9 @@ def calculate_fifo_report(df):
         sid = str(row.get(col_id, '')).strip()
         action = row.get(col_action, '')
         stock_name = str(row.get(col_name, '')).strip()
-        if action in ['入金', '出金']: continue
+        # [Fix] 排除非庫存相關交易
+        if action in ['入金', '出金', '還款']: continue 
+        
         if sid and stock_name: names_map[sid] = stock_name
         
         qty = _safe_float(row.get(col_qty))
@@ -177,6 +181,8 @@ def calculate_unrealized_pnl(df_fifo, current_price_map):
     return df_fifo
 
 def calculate_realized_report(df):
+    if df.empty: return pd.DataFrame()
+    df = df.copy()
     df.columns = df.columns.str.strip()
     col_date = '交易日期'
     col_id = '股票代號'
@@ -197,7 +203,9 @@ def calculate_realized_report(df):
 
     for _, row in df.iterrows():
         action = row.get(col_action, '')
-        if action in ['入金', '出金']: continue
+        # [Fix] 排除非庫存交易
+        if action in ['入金', '出金', '還款']: continue
+        
         sid = str(row.get(col_id, '')).strip()
         stock_name = str(row.get(col_name, '')).strip()
         txn_date = row[col_date]
@@ -206,10 +214,12 @@ def calculate_realized_report(df):
         fee = _safe_float(row.get(col_fee))
         tax = _safe_float(row.get(col_tax))
         other = _safe_float(row.get(col_other))
+        
         total_buy_cost_raw = (qty * price) + fee + other
         net_sell_proceeds = (qty * price) - fee - tax - other
         
         if sid not in portfolio: portfolio[sid] = deque()
+        
         if action in ['買進', '現金增資']:
             unit_cost = total_buy_cost_raw / qty if qty > 0 else 0
             portfolio[sid].append({'qty': qty, 'unit_cost': unit_cost})
@@ -248,7 +258,7 @@ def calculate_realized_report(df):
     return df_res
 
 def calculate_account_balances(df):
-    """統計各帳戶的現金餘額 (暴力清洗版)"""
+    """統計各帳戶現金餘額"""
     if df.empty: return {}
     df.columns = df.columns.str.strip()
     col_account = '交易帳戶'
@@ -256,7 +266,6 @@ def calculate_account_balances(df):
     if col_account not in df.columns or col_net_cash not in df.columns: return {}
 
     df_calc = df.copy()
-    # [關鍵修正] 使用 regex=True 一次移除 , 和 $，並強制轉字串
     df_calc[col_net_cash] = df_calc[col_net_cash].astype(str).str.replace(r'[$,]', '', regex=True)
     df_calc[col_net_cash] = pd.to_numeric(df_calc[col_net_cash], errors='coerce').fillna(0)
     
@@ -281,64 +290,32 @@ def get_volume_multiplier(current_time_str, mp_df):
     except: return 1.0
 
 def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
-    """
-    計算量比
-    current_vol: 現量 (張)
-    vol_10ma: 10日均量 (股) -> [Fix] 需轉為張
-    multiplier: 量能倍數
-    """
     if vol_10ma is None or vol_10ma == 0: return 0, 0
-    
-    # 預估量 (張)
     est_vol = current_vol * multiplier
-    
-    # [Fix] 單位轉換：10日均量 (股) -> 10日均量 (張)
     vol_10ma_sheets = vol_10ma / 1000
-    
-    # 避免分母為 0
-    if vol_10ma_sheets == 0:
-        return int(est_vol), 0
-        
+    if vol_10ma_sheets == 0: return int(est_vol), 0
     ratio = est_vol / vol_10ma_sheets
     return int(est_vol), round(ratio, 2)
 
-# --- [New] 目標進度運算 ---
+# --- [New] 目標進度運算 (第二階段新增) ---
 def calculate_goal_progress(df_goals, df_txn):
-    """
-    計算目標達成率
-    邏輯：
-    1. 讀取目標設定檔 (分母)
-    2. 讀取交易紀錄，篩選「還款」類別，依據「股票名稱(目標名)」加總 (分子)
-    3. 回傳整合後的清單
-    """
-    if df_goals.empty:
-        return []
+    if df_goals.empty: return []
 
-    # 1. 計算目前的累積還款額 (從交易紀錄)
     current_progress_map = {}
-    
     if not df_txn.empty:
-        # 篩選類別為 '還款' 的紀錄
-        # 注意：還款金額在資料庫是負數，需轉絕對值
+        # [Fix] 篩選 '還款' 類別
         df_repay = df_txn[df_txn['交易類別'] == '還款'].copy()
-        
         if not df_repay.empty:
-            # 確保金額為數值
             df_repay['淨收付金額'] = pd.to_numeric(df_repay['淨收付金額'].astype(str).str.replace(',', ''), errors='coerce').abs()
-            # 依據 '股票名稱' (即目標名稱) 分組加總
             current_progress_map = df_repay.groupby('股票名稱')['淨收付金額'].sum().to_dict()
 
-    # 2. 整合目標與進度
     goals_data = []
     for _, row in df_goals.iterrows():
         name = str(row.get('目標名稱', '')).strip()
         target = float(row.get('目標金額', 0))
-        if target <= 0: continue # 避免除以零
+        if target <= 0: continue
         
-        # 取得目前進度 (若無紀錄則為 0)
         current = current_progress_map.get(name, 0.0)
-        
-        # 計算百分比
         pct = (current / target) * 100
         if pct > 100: pct = 100
         
@@ -350,5 +327,4 @@ def calculate_goal_progress(df_goals, df_txn):
             'start_date': row.get('起始日期', ''),
             'end_date': row.get('截止日期', '')
         })
-        
     return goals_data
