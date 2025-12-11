@@ -2,20 +2,21 @@
 # 檔案名稱: logic.py
 # 
 # 修改歷程:
+# 2025-12-11 14:00:00: [Feat] 第四階段：目標進度增加時間維度運算 (Time Pacer)
 # 2025-12-11 13:30:00: [Feat] 第三階段：支援「還款」邏輯 (視為負向現金流)
-# 2025-12-11 13:00:00: [Feat] 第二階段：新增目標進度運算 calculate_goal_progress
 # ==============================================================================
 
 import pandas as pd
 from collections import deque
 import uuid
 from datetime import datetime
+import math
 
 # --- 常數設定 ---
 COMMISSION_RATE = 0.001425
 MIN_FEE = 1
-TAX_RATE = 0.003       # 一般股票交易稅
-ETF_TAX_RATE = 0.001   # ETF 交易稅
+TAX_RATE = 0.003       
+ETF_TAX_RATE = 0.001   
 
 def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     """計算單筆交易的費用與淨收付"""
@@ -37,7 +38,6 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
     
     net_cash_flow = 0
     
-    # [關鍵修改] 定義各類動作的現金流向
     if action in ['買進', '現金增資']:
         net_cash_flow = -(gross_amount + total_fees)
     elif action == '賣出':
@@ -46,7 +46,7 @@ def calculate_fees(qty, price, action, discount=1.0, stock_id=""):
         net_cash_flow = gross_amount - total_fees
     elif action == '入金':
         net_cash_flow = gross_amount
-    elif action in ['出金', '還款']: # [New] 還款視同出金 (現金減少)
+    elif action in ['出金', '還款']:
         net_cash_flow = -gross_amount
         
     return {
@@ -103,7 +103,6 @@ def calculate_fifo_report(df):
         sid = str(row.get(col_id, '')).strip()
         action = row.get(col_action, '')
         stock_name = str(row.get(col_name, '')).strip()
-        # [Fix] 排除非庫存相關交易
         if action in ['入金', '出金', '還款']: continue 
         
         if sid and stock_name: names_map[sid] = stock_name
@@ -203,7 +202,6 @@ def calculate_realized_report(df):
 
     for _, row in df.iterrows():
         action = row.get(col_action, '')
-        # [Fix] 排除非庫存交易
         if action in ['入金', '出金', '還款']: continue
         
         sid = str(row.get(col_id, '')).strip()
@@ -258,7 +256,6 @@ def calculate_realized_report(df):
     return df_res
 
 def calculate_account_balances(df):
-    """統計各帳戶現金餘額"""
     if df.empty: return {}
     df.columns = df.columns.str.strip()
     col_account = '交易帳戶'
@@ -297,19 +294,20 @@ def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
     ratio = est_vol / vol_10ma_sheets
     return int(est_vol), round(ratio, 2)
 
-# --- [New] 目標進度運算 (第二階段新增) ---
+# --- [Updated] 目標進度運算 (含時間維度) ---
 def calculate_goal_progress(df_goals, df_txn):
     if df_goals.empty: return []
 
     current_progress_map = {}
     if not df_txn.empty:
-        # [Fix] 篩選 '還款' 類別
         df_repay = df_txn[df_txn['交易類別'] == '還款'].copy()
         if not df_repay.empty:
             df_repay['淨收付金額'] = pd.to_numeric(df_repay['淨收付金額'].astype(str).str.replace(',', ''), errors='coerce').abs()
             current_progress_map = df_repay.groupby('股票名稱')['淨收付金額'].sum().to_dict()
 
     goals_data = []
+    today = datetime.now()
+
     for _, row in df_goals.iterrows():
         name = str(row.get('目標名稱', '')).strip()
         target = float(row.get('目標金額', 0))
@@ -319,12 +317,64 @@ def calculate_goal_progress(df_goals, df_txn):
         pct = (current / target) * 100
         if pct > 100: pct = 100
         
+        # [New] 時間維度計算
+        start_date_str = str(row.get('起始日期', ''))
+        end_date_str = str(row.get('截止日期', ''))
+        
+        time_info = {
+            'has_date': False,
+            'time_pct': 0,
+            'remaining_months': 0,
+            'monthly_needed': 0,
+            'status': 'normal' # normal, behind, ahead
+        }
+        
+        try:
+            # 嘗試解析日期
+            start_dt = pd.to_datetime(start_date_str)
+            end_dt = pd.to_datetime(end_date_str)
+            
+            if pd.notna(start_dt) and pd.notna(end_dt) and end_dt > start_dt:
+                time_info['has_date'] = True
+                total_days = (end_dt - start_dt).days
+                elapsed_days = (today - start_dt).days
+                
+                # 計算時間經過百分比
+                if elapsed_days < 0: 
+                    t_pct = 0 # 尚未開始
+                elif elapsed_days > total_days:
+                    t_pct = 100 # 已過期
+                else:
+                    t_pct = (elapsed_days / total_days) * 100
+                
+                time_info['time_pct'] = t_pct
+                
+                # 計算落後狀態 (資金進度 < 時間進度)
+                # 給予 5% 的寬容值
+                if pct < (t_pct - 5):
+                    time_info['status'] = 'behind'
+                elif pct > (t_pct + 5):
+                    time_info['status'] = 'ahead'
+                
+                # 計算剩餘所需 (若尚未達成)
+                if current < target and end_dt > today:
+                    # 簡單以月計算
+                    remaining_days = (end_dt - today).days
+                    remaining_months = max(remaining_days / 30, 1) # 至少除以1避免報錯
+                    monthly_needed = (target - current) / remaining_months
+                    
+                    time_info['remaining_months'] = remaining_months
+                    time_info['monthly_needed'] = monthly_needed
+
+        except:
+            pass # 日期格式錯誤則忽略時間運算
+
         goals_data.append({
             'name': name,
             'target': target,
             'current': current,
             'percent': pct,
-            'start_date': row.get('起始日期', ''),
-            'end_date': row.get('截止日期', '')
+            'time_info': time_info # 包含時間運算結果
         })
+        
     return goals_data
