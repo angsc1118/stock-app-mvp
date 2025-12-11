@@ -295,15 +295,23 @@ def calculate_volume_ratio(current_vol, vol_10ma, multiplier):
     return int(est_vol), round(ratio, 2)
 
 # --- [Updated] 目標進度運算 (含時間維度) ---
+# --- [Updated] 目標進度運算 (含時間維度 + 獲利目標自動追蹤) ---
 def calculate_goal_progress(df_goals, df_txn):
     if df_goals.empty: return []
 
-    current_progress_map = {}
+    # 1. 預先計算資料：還款累計
+    current_repay_map = {}
     if not df_txn.empty:
         df_repay = df_txn[df_txn['交易類別'] == '還款'].copy()
         if not df_repay.empty:
             df_repay['淨收付金額'] = pd.to_numeric(df_repay['淨收付金額'].astype(str).str.replace(',', ''), errors='coerce').abs()
-            current_progress_map = df_repay.groupby('股票名稱')['淨收付金額'].sum().to_dict()
+            current_repay_map = df_repay.groupby('股票名稱')['淨收付金額'].sum().to_dict()
+
+    # 2. 預先計算資料：已實現損益 (供獲利目標使用)
+    df_realized = calculate_realized_report(df_txn)
+    if not df_realized.empty:
+        # 確保日期格式為 datetime 以便比較
+        df_realized['交易日期'] = pd.to_datetime(df_realized['交易日期'])
 
     goals_data = []
     today = datetime.now()
@@ -311,26 +319,46 @@ def calculate_goal_progress(df_goals, df_txn):
     for _, row in df_goals.iterrows():
         name = str(row.get('目標名稱', '')).strip()
         target = float(row.get('目標金額', 0))
+        goal_type = str(row.get('目標類型', '還款')).strip() # 讀取類型
+        
         if target <= 0: continue
         
-        current = current_progress_map.get(name, 0.0)
-        pct = (current / target) * 100
-        if pct > 100: pct = 100
-        
-        # [New] 時間維度計算
+        current = 0.0
         start_date_str = str(row.get('起始日期', ''))
         end_date_str = str(row.get('截止日期', ''))
         
+        # --- 分流邏輯 ---
+        if goal_type == '獲利':
+            # 獲利型：計算區間內的已實現損益
+            if not df_realized.empty:
+                try:
+                    s_dt = pd.to_datetime(start_date_str)
+                    e_dt = pd.to_datetime(end_date_str)
+                    # 篩選日期區間
+                    mask = (df_realized['交易日期'] >= s_dt) & (df_realized['交易日期'] <= e_dt)
+                    profit_sum = df_realized.loc[mask, '已實現損益'].sum()
+                    # 若虧損 (負值)，顯示 0 (依需求不顯示負進度)
+                    current = max(0, profit_sum)
+                except:
+                    current = 0
+        else:
+            # 還款型 (預設)：讀取還款累計 Map
+            current = current_repay_map.get(name, 0.0)
+        
+        # --- 通用進度計算 ---
+        pct = (current / target) * 100
+        if pct > 100: pct = 100
+        
+        # 時間維度計算
         time_info = {
             'has_date': False,
             'time_pct': 0,
             'remaining_months': 0,
             'monthly_needed': 0,
-            'status': 'normal' # normal, behind, ahead
+            'status': 'normal'
         }
         
         try:
-            # 嘗試解析日期
             start_dt = pd.to_datetime(start_date_str)
             end_dt = pd.to_datetime(end_date_str)
             
@@ -339,42 +367,32 @@ def calculate_goal_progress(df_goals, df_txn):
                 total_days = (end_dt - start_dt).days
                 elapsed_days = (today - start_dt).days
                 
-                # 計算時間經過百分比
-                if elapsed_days < 0: 
-                    t_pct = 0 # 尚未開始
-                elif elapsed_days > total_days:
-                    t_pct = 100 # 已過期
-                else:
-                    t_pct = (elapsed_days / total_days) * 100
+                if elapsed_days < 0: t_pct = 0
+                elif elapsed_days > total_days: t_pct = 100
+                else: t_pct = (elapsed_days / total_days) * 100
                 
                 time_info['time_pct'] = t_pct
                 
-                # 計算落後狀態 (資金進度 < 時間進度)
-                # 給予 5% 的寬容值
-                if pct < (t_pct - 5):
-                    time_info['status'] = 'behind'
-                elif pct > (t_pct + 5):
-                    time_info['status'] = 'ahead'
+                # 落後判斷 (寬容 5%)
+                if pct < (t_pct - 5): time_info['status'] = 'behind'
+                elif pct > (t_pct + 5): time_info['status'] = 'ahead'
                 
-                # 計算剩餘所需 (若尚未達成)
+                # 剩餘所需計算
                 if current < target and end_dt > today:
-                    # 簡單以月計算
                     remaining_days = (end_dt - today).days
-                    remaining_months = max(remaining_days / 30, 1) # 至少除以1避免報錯
+                    remaining_months = max(remaining_days / 30, 1)
                     monthly_needed = (target - current) / remaining_months
-                    
                     time_info['remaining_months'] = remaining_months
                     time_info['monthly_needed'] = monthly_needed
-
         except:
-            pass # 日期格式錯誤則忽略時間運算
+            pass
 
         goals_data.append({
             'name': name,
             'target': target,
             'current': current,
             'percent': pct,
-            'time_info': time_info # 包含時間運算結果
+            'time_info': time_info
         })
         
     return goals_data
