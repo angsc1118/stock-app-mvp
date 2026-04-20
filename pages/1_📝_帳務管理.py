@@ -56,7 +56,11 @@ if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] 
 if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
 if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
-
+default_notes_template = """進場理由: 
+                                        出場理由: 
+                                        損益結果: 
+                                        當下心情: 
+                                        下次改進方式: """
 # --- 呼叫全域狀態列 ---
 utils.render_sidebar_status()
 
@@ -218,11 +222,6 @@ with st.sidebar:
             else:
                 st.number_input("股數", min_value=0, step=1000, key="txn_qty")
                 st.number_input("單價/成本", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
-            default_notes_template = """進場理由: 
-                                        出場理由: 
-                                        損益結果: 
-                                        當下心情: 
-                                        下次改進方式: """
             with st.expander("📝 交易心得與備註 (必填)", expanded=True):
                 # 如果 txn_notes 目前是空的，就帶入預設模板
                 if not st.session_state.txn_notes:
