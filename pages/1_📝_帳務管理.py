@@ -4,7 +4,6 @@
 # 修改歷程:
 # 2025-12-11 13:30:00: [Feat] 第三階段：交易輸入整合 (支援還款 + 目標選擇)
 # 2025-12-11 11:45:00: [Fix] 修正 Session State 修改錯誤
-# 2026-04-20 11:45:00: [Fix] 修正 Session State 修改錯誤
 # ==============================================================================
 
 import streamlit as st
@@ -57,11 +56,7 @@ if "txn_stock_name" not in st.session_state: st.session_state["txn_stock_name"] 
 if "txn_qty" not in st.session_state: st.session_state["txn_qty"] = 0
 if "txn_price" not in st.session_state: st.session_state["txn_price"] = 0.0
 if "txn_notes" not in st.session_state: st.session_state["txn_notes"] = ""
-default_notes_template = """進場理由: 
-                                        出場理由: 
-                                        損益結果: 
-                                        當下心情: 
-                                        下次改進方式: """
+
 # --- 呼叫全域狀態列 ---
 utils.render_sidebar_status()
 
@@ -223,12 +218,9 @@ with st.sidebar:
             else:
                 st.number_input("股數", min_value=0, step=1000, key="txn_qty")
                 st.number_input("單價/成本", min_value=0.0, step=0.5, format="%.2f", key="txn_price")
-            with st.expander("📝 交易心得與備註 (必填)", expanded=True):
-                # 如果 txn_notes 目前是空的，就帶入預設模板
-                if not st.session_state.txn_notes:
-                    st.session_state.txn_notes = default_notes_template
-        
-                    st.text_area("內容", key="txn_notes", height=180)
+
+        with st.expander("📝 備註 (選填)"):
+            st.text_area("內容", key="txn_notes", height=60)
             
         st.button("💾 提交交易", type="primary", use_container_width=True, on_click=submit_callback)
 
