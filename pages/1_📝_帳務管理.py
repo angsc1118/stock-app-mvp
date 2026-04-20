@@ -224,11 +224,11 @@ with st.sidebar:
                                         當下心情: 
                                         下次改進方式: """
             with st.expander("📝 交易心得與備註 (必填)", expanded=True):
-            # 如果 txn_notes 目前是空的，就帶入預設模板
-            if not st.session_state.txn_notes:
-                st.session_state.txn_notes = default_notes_template
+                # 如果 txn_notes 目前是空的，就帶入預設模板
+                if not st.session_state.txn_notes:
+                    st.session_state.txn_notes = default_notes_template
         
-                st.text_area("內容", key="txn_notes", height=180)
+                    st.text_area("內容", key="txn_notes", height=180)
             
         st.button("💾 提交交易", type="primary", use_container_width=True, on_click=submit_callback)
 
