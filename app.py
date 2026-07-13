@@ -2,7 +2,6 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
-# 2026-07-13 10:00:00: [Feat] 盤中戰情室改版：Alerts & Actions 改為戰情警示牆 (呼叫 logic.generate_alerts)，更新按鈕改抓 detailed quotes 以支援爆量/乖離告警
 # 2025-12-11 15:52:00: [Refactor] 方案 A 實作：將 Dashboard 拆分為 KPI(動)、Goals(靜)、Charts(動) 三區塊
 # 2025-12-11 15:00:00: [UI] Fix: 強力修正 Expander 標題列背景變白問題
 # ==============================================================================
@@ -82,21 +81,6 @@ st.markdown("""
     .tight-list-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #333333; font-size: 14px; }
     .tight-list-item:last-child { border-bottom: none; }
     .stock-name { font-weight: 600; color: #E0E0E0; }
-
-    /* 戰情警示牆卡片 */
-    .alert-card {
-        background-color: #1E2130; border-radius: 8px; padding: 12px 14px;
-        margin-bottom: 10px; border: 1px solid #333333; border-left: 4px solid #333333;
-    }
-    .alert-card.critical { border-left-color: #FF5252; }
-    .alert-card.warn { border-left-color: #FFB74D; }
-    .alert-card.info { border-left-color: #29B6F6; }
-    .alert-card .ac-row { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; font-weight: 600; color: #E0E0E0; margin-bottom: 5px; }
-    .alert-card .ac-badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
-    .alert-card.critical .ac-badge { color: #FF5252; background: rgba(255,82,82,0.12); }
-    .alert-card.warn .ac-badge { color: #FFB74D; background: rgba(255,183,77,0.12); }
-    .alert-card.info .ac-badge { color: #29B6F6; background: rgba(41,182,246,0.12); }
-    .alert-card .ac-msg { font-size: 12px; color: #B0B0B0; line-height: 1.5; }
     div.stButton > button { background-color: #29B6F6; color: white; border: none; border-radius: 6px; font-weight: 600; height: 42px; transition: all 0.3s ease; }
     div.stButton > button:hover { background-color: #039BE5; color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     div.stButton > button:active { background-color: #0277BD; }
@@ -120,26 +104,6 @@ def dashboard_card(title, value, delta_text, delta_color, bar_color):
     </div>
     """
     st.markdown(html_code, unsafe_allow_html=True)
-
-def alert_card(alert):
-    """渲染單一戰情警示卡片 (呼叫 logic.generate_alerts() 產生的告警字典)"""
-    severity = alert.get("severity", "info")
-    type_label_map = {
-        "cash_level": "現金水位", "stop_loss": "停損", "breakout": "突破",
-        "breakdown": "跌破", "volume_spike": "爆量", "bias": "乖離過大", "best_performer": "最佳表現"
-    }
-    badge_text = type_label_map.get(alert.get("type", ""), alert.get("type", ""))
-    title = alert["name"] if not alert.get("symbol") else f"{alert['name']} ({alert['symbol']})"
-    html = f"""
-    <div class="alert-card {severity}">
-        <div class="ac-row">
-            <span>{alert.get('icon','')} {title}</span>
-            <span class="ac-badge">{badge_text}</span>
-        </div>
-        <div class="ac-msg">{alert['message']}</div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
 
 def goal_progress_bar(name, current, target, percent, time_info, zen_mode):
     if percent < 30: bar_color = "linear-gradient(90deg, #FF5252, #FF8A65)" 
@@ -183,7 +147,6 @@ def goal_progress_bar(name, current, target, percent, time_info, zen_mode):
 
 # 3. 初始化 Session
 if "realtime_prices" not in st.session_state: st.session_state["realtime_prices"] = {}
-if "realtime_quotes" not in st.session_state: st.session_state["realtime_quotes"] = {}  # detailed quotes (含成交量)，供戰情警示牆使用
 if "price_update_time" not in st.session_state: st.session_state["price_update_time"] = None
 if "ta_data" not in st.session_state: st.session_state["ta_data"] = {}
 
@@ -214,26 +177,13 @@ with c_btn:
             temp_fifo = logic.calculate_fifo_report(df_raw)
             if not temp_fifo.empty:
                 stock_ids = temp_fifo['股票代號'].unique().tolist()
-
-                # 納入設有警示價的自選股 (非庫存)，讓突破/跌破告警也能涵蓋這些股票
-                try:
-                    df_watch_for_update = database.load_watchlist()
-                    if not df_watch_for_update.empty and '股票代號' in df_watch_for_update.columns:
-                        has_limit = pd.to_numeric(df_watch_for_update.get('警示價_高'), errors='coerce').fillna(0) > 0
-                        has_limit |= pd.to_numeric(df_watch_for_update.get('警示價_低'), errors='coerce').fillna(0) > 0
-                        watch_ids = df_watch_for_update.loc[has_limit, '股票代號'].astype(str).str.strip().tolist()
-                        stock_ids = list(set(stock_ids + watch_ids))
-                except:
-                    pass
-
                 with st.status("🚀 連線交易所主機中...", expanded=True) as status:
-                    st.write("1. 抓取即時報價 (含成交量，供戰情警示牆使用)...")
-                    quotes = market_data.get_batch_detailed_quotes(stock_ids)
+                    st.write("1. 抓取即時報價...")
+                    prices = market_data.get_realtime_prices(stock_ids)
                     st.write("2. 計算技術指標...")
                     ta_data = market_data.get_batch_technical_analysis(stock_ids)
                     status.update(label="✅ 更新完成", state="complete", expanded=False)
-                st.session_state["realtime_quotes"] = quotes
-                st.session_state["realtime_prices"] = {k: v.get('price', 0) for k, v in quotes.items()}
+                st.session_state["realtime_prices"] = prices
                 st.session_state["ta_data"] = ta_data
                 tw_time = datetime.utcnow() + timedelta(hours=8)
                 st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -286,7 +236,7 @@ def render_goals_section(df_raw, zen_mode):
                             zen_mode
                         )
 
-# --- PART C: Alert Wall & Charts (動態, 60s) ---
+# --- PART C: Charts & Alerts (動態, 60s) ---
 @st.fragment(run_every=60)
 def render_charts_section(df_raw):
     # 重複必要的計算
@@ -300,40 +250,8 @@ def render_charts_section(df_raw):
     total_assets = total_cash + total_market_value
     cash_ratio = (total_cash / total_assets * 100) if total_assets > 0 else 0
 
-    # --- 戰情警示牆 (Hero) ---
-    st.markdown("##### ⚠️ 戰情警示牆")
-    quotes = st.session_state.get("realtime_quotes", {})
-    ta_data = st.session_state.get("ta_data", {})
-    try:
-        df_watch = database.load_watchlist()
-    except:
-        df_watch = pd.DataFrame(columns=['群組', '股票代號', '股票名稱', '警示價_高', '警示價_低', '備註'])
-    try:
-        df_mp = database.load_mp_table()
-    except:
-        df_mp = pd.DataFrame()
-    tw_now = datetime.utcnow() + timedelta(hours=8)
-    current_time_str = tw_now.strftime("%H:%M")
-
-    alerts = logic.generate_alerts(df_unrealized, cash_ratio, quotes, df_watch, ta_data, df_mp, current_time_str)
-
-    if not alerts:
-        st.caption("✅ 目前無告警，一切正常。")
-    else:
-        if not quotes:
-            st.caption("💡 尚未取得含成交量的即時報價，突破/跌破/爆量/乖離告警可能不完整，請點擊上方「🔄 更新數據」。")
-        n_cols = 3
-        for i in range(0, len(alerts), n_cols):
-            row_alerts = alerts[i:i + n_cols]
-            cols = st.columns(n_cols)
-            for col, a in zip(cols, row_alerts):
-                with col:
-                    alert_card(a)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    c1, c2 = st.columns(2)
-
+    c1, c2, c3 = st.columns(3)
+    
     # Asset Allocation
     with c1:
         with st.container(border=True):
@@ -362,6 +280,27 @@ def render_charts_section(df_raw):
             else:
                 st.info("無現金餘額")
                 st.write(""); st.write("")
+
+    # Alerts & Actions
+    with c3:
+        with st.container(border=True):
+            st.markdown("##### ⚠️ Alerts & Actions")
+            alerts_html = ""
+            if cash_ratio < 10: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🔴 Cash Level</span><span>Critical (&lt;10%)</span></div>"
+            elif cash_ratio > 80: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟡 Cash Level</span><span>High (&gt;80%)</span></div>"
+            else: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Cash Level</span><span>Healthy ({cash_ratio:.0f}%)</span></div>"
+            
+            if not df_unrealized.empty:
+                danger_count = len(df_unrealized[df_unrealized['報酬率 (%)'] < -20])
+                if danger_count > 0: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🔴 Stop Loss</span><span>{danger_count} stocks &lt; -20%</span></div>"
+                else: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🟢 Stop Loss</span><span>All Clear</span></div>"
+            
+            if not df_unrealized.empty:
+                best_stock = df_unrealized.sort_values('報酬率 (%)', ascending=False).iloc[0]
+                if best_stock['報酬率 (%)'] > 0: alerts_html += f"<div class='tight-list-item'><span class='stock-name'>🏆 Best Performer</span><span>{best_stock['股票名稱']} (+{best_stock['報酬率 (%)']:.1f}%)</span></div>"
+
+            st.markdown(alerts_html, unsafe_allow_html=True)
+            st.write(""); st.write(""); st.write("")
 
     st.markdown("<br>", unsafe_allow_html=True)
 

@@ -2,7 +2,6 @@
 # 檔案名稱: pages/2_🚀_盤中監控.py
 # 
 # 修改歷程:
-# 2026-07-13 10:00:00: [Refactor] 告警判斷邏輯改呼叫共用的 logic.generate_alerts()，與首頁戰情警示牆共用同一套規則
 # 2025-12-10 12:50:00: [UI] 側邊欄優化(階段一)：圖示說明收入 Expander，標題層級調整
 # 2025-12-04 16:30:00: [UI] 導入視覺優化方案：更新量能(⚡)與警示(🔔/💔)圖示
 # ==============================================================================
@@ -207,13 +206,6 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
     current_time_str = tw_now.strftime("%H:%M")
     multiplier = logic.get_volume_multiplier(current_time_str, df_mp)
 
-    # 統一告警邏輯：呼叫與首頁共用的 generate_alerts()
-    # 註：此頁無未實現損益/現金水位資料，df_unrealized 傳 None，cash_ratio 傳 50 (中性值，不觸發現金告警)
-    generated_alerts = logic.generate_alerts(None, 50, quotes, df_watch, ta_data, df_mp, current_time_str)
-    alerts_by_symbol = {}
-    for a in generated_alerts:
-        alerts_by_symbol.setdefault(a['symbol'], []).append(a)
-
     table_rows = []
     alerts_data = [] 
     debug_ta_list = []      
@@ -257,29 +249,27 @@ def render_monitor_table(selected_group, inventory_list, df_watch, df_mp):
             name = stock_map.get(symbol, symbol)
 
         status_icon = ""
-        stock_alerts = []
-        symbol_alerts = alerts_by_symbol.get(symbol, [])
-        types_present = {a['type']: a for a in symbol_alerts}
-
-        if 'breakout' in types_present:
-            a = types_present['breakout']
-            stock_alerts.append(f"{a['icon']} {a['message']}")
-            status_icon += a['icon']
-        if 'breakdown' in types_present:
-            a = types_present['breakdown']
-            stock_alerts.append(f"{a['icon']} {a['message']}")
-            status_icon += a['icon']
-        if 'volume_spike' in types_present:
-            a = types_present['volume_spike']
-            stock_alerts.append(f"{a['icon']} {a['message']}")
-            status_icon += a['icon']
-        elif vol_ratio > 1.5:
-            status_icon += "⚡"  # 增量 (未達爆量門檻，僅顯示狀態圖示，非正式告警)
-        if 'bias' in types_present:
-            a = types_present['bias']
-            stock_alerts.append(f"{a['icon']} {a['message']}")
-            status_icon += a['icon']
-
+        stock_alerts = [] 
+        
+        if high_limit > 0 and price >= high_limit:
+            msg = f"🔔 突破目標價 {high_limit} (現價 {price})"
+            stock_alerts.append(msg)
+            status_icon += "🔔"
+        if low_limit > 0 and price > 0 and price <= low_limit:
+            msg = f"💔 跌破支撐價 {low_limit} (現價 {price})"
+            stock_alerts.append(msg)
+            status_icon += "💔"
+            
+        if vol_ratio > 2.0: 
+            stock_alerts.append(f"🔥 爆量 (量比 {vol_ratio:.2f})")
+            status_icon += "🔥"
+        elif vol_ratio > 1.5: 
+            status_icon += "⚡" 
+            
+        if bias > 20: 
+            stock_alerts.append(f"⚠️ 乖離過大 (BIAS {bias:.2f}%)")
+            status_icon += "⚠️"
+        
         if stock_alerts:
             alerts_data.append({"symbol": symbol, "name": name, "msgs": stock_alerts})
         
