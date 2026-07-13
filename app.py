@@ -190,7 +190,7 @@ with c_btn:
                 st.rerun()
 
 # --- PART A: KPI 卡片 (動態, 60s) ---
-@st.fragment(run_every=60)
+@st.fragment()
 def render_kpi_section(df_raw):
     # 重複必要的計算 (Fragment 獨立性)
     acc_balances = logic.calculate_account_balances(df_raw)
@@ -237,7 +237,7 @@ def render_goals_section(df_raw, zen_mode):
                         )
 
 # --- PART C: Charts & Alerts (動態, 60s) ---
-@st.fragment(run_every=60)
+@st.fragment()
 def render_charts_section(df_raw):
     # 重複必要的計算
     acc_balances = logic.calculate_account_balances(df_raw)
