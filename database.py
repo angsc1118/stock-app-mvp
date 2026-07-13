@@ -2,6 +2,8 @@
 # 檔案名稱: database.py
 # 
 # 修改歷程:
+# 2026-07-13 08:00:00: [Fix] load_data() 擴大修正範圍：一次將 6 個數值欄位 (股數/單價/手續費/交易稅/其他費用/淨收付金額) 強制轉為數字型別，
+#                       避免入金/出金/還款/股息等交易類別留空的欄位個別觸發 ArrowInvalid，取代先前只修 股票代號 單一欄位的做法
 # 2026-07-13 06:00:00: [Fix] load_data() 強制將「股票代號」欄位轉為字串型別，修正入金/出金/還款列因股票代號為空值，導致新版 pyarrow 型別推斷失敗 (ArrowInvalid) 造成 Streamlit 進程崩潰的問題
 # 2025-12-11 12:40:00: [Feat] 第一階段：新增 load_goals 函式，讀取「目標設定」工作表
 # 2025-11-27 14:50:00: [Feat] 新增 save_watchlist 函式
@@ -86,11 +88,22 @@ def load_data():
     try:
         data = ws.get_all_records()
         df = pd.DataFrame(data)
+
         if '股票代號' in df.columns:
             # 入金/出金/還款列本來就沒有股票代號 (空值)，與其他列的數字型代號混在同一欄。
             # 若不強制轉字串，pandas/pyarrow 會誤判整欄型別為 int64，遇到空值就丟例外 (ArrowInvalid)。
             df['股票代號'] = df['股票代號'].astype(str).str.strip()
             df.loc[df['股票代號'].isin(['nan', 'None']), '股票代號'] = ''
+
+        # 數值欄位：入金/出金/還款/股息等交易類別會讓部分欄位留空，跟其他列的數字混在同一欄，
+        # 同樣會觸發 ArrowInvalid (股票代號 只是第一個被撞見的欄位，其他數值欄位體質相同)。
+        # 一次處理，避免之後又在其他欄位個別重演同一種崩潰。
+        numeric_cols = ['股數', '單價', '手續費', '交易稅', '其他費用', '淨收付金額']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.replace(r'[$,]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
         return df
     except Exception as e:
         st.error(f"讀取交易紀錄失敗: {e}")
