@@ -1,8 +1,9 @@
-streamlit
-pandas
-gspread
-google-auth
-requests
-plotly
-yfinance
-mplfinance
+streamlit==1.59.1
+pandas==3.0.3
+gspread==6.2.1
+google-auth==2.55.2
+google-auth-oauthlib==1.4.0
+requests==2.34.2
+plotly==6.9.0
+yfinance==1.5.1
+mplfinance==0.12.10b0
