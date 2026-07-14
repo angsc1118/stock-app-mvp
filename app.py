@@ -2,6 +2,8 @@
 # 檔案名稱: app.py
 # 
 # 修改歷程:
+# 2026-07-13 09:00:00: [Fix] Stock Allocation 圖表改用 go.Pie() 取代 px.pie()，排查「更新數據」後首次繪製圓餅圖時 Segmentation fault 的問題
+# 2026-07-13 07:30:00: [Fix] 拿掉 KPI/Charts 兩個 Fragment 的 run_every=60，此參數並未帶來實際效益 (資料只在按下更新按鈕時才會變動)，且是先前「放置 60 秒後崩潰」的觸發點
 # 2025-12-11 15:52:00: [Refactor] 方案 A 實作：將 Dashboard 拆分為 KPI(動)、Goals(靜)、Charts(動) 三區塊
 # 2025-12-11 15:00:00: [UI] Fix: 強力修正 Expander 標題列背景變白問題
 # ==============================================================================
@@ -189,7 +191,7 @@ with c_btn:
                 st.session_state["price_update_time"] = tw_time.strftime("%Y-%m-%d %H:%M:%S")
                 st.rerun()
 
-# --- PART A: KPI 卡片 (動態, 60s) ---
+# --- PART A: KPI 卡片 (動態) ---
 @st.fragment()
 def render_kpi_section(df_raw):
     # 重複必要的計算 (Fragment 獨立性)
@@ -236,7 +238,7 @@ def render_goals_section(df_raw, zen_mode):
                             zen_mode
                         )
 
-# --- PART C: Charts & Alerts (動態, 60s) ---
+# --- PART C: Charts & Alerts (動態) ---
 @st.fragment()
 def render_charts_section(df_raw):
     # 重複必要的計算
@@ -258,8 +260,10 @@ def render_charts_section(df_raw):
             st.markdown("##### Stock Allocation")
             if not df_unrealized.empty and total_market_value > 0:
                 sorted_stocks = df_unrealized.sort_values('股票市值', ascending=False)
-                fig_pie = px.pie(sorted_stocks, values='股票市值', names='股票名稱', hole=0.6)
-                fig_pie.update_traces(textinfo='percent', textposition='inside')
+                fig_pie = go.Figure(data=[go.Pie(
+                    labels=sorted_stocks['股票名稱'], values=sorted_stocks['股票市值'], hole=0.6,
+                    textinfo='percent', textposition='inside'
+                )])
                 fig_pie.update_layout(template="plotly_dark", showlegend=True, legend=dict(orientation="h", y=-0.2, font=dict(color="#E0E0E0")), margin=dict(t=10, b=10, l=10, r=10), height=250, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#E0E0E0'))
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
